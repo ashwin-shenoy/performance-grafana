@@ -1,0 +1,138 @@
+###############################################################################
+# Tekton Pipeline — OpenShift-native CI/CD for performance tests
+# Triggers a full test cycle: deploy workers -> run test -> collect results
+#
+# Prerequisites: OpenShift Pipelines Operator installed
+###############################################################################
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: jmeter-run-test
+  namespace: perf-testing
+  labels:
+    app.kubernetes.io/part-of: jmeter-platform
+spec:
+  params:
+    - name: jmx-file
+      type: string
+      description: "JMX scenario file name"
+    - name: namespace
+      type: string
+      default: "perf-testing"
+    - name: worker-count
+      type: string
+      default: "3"
+    - name: enable-csv
+      type: string
+      default: "false"
+    - name: enable-modules
+      type: string
+      default: "false"
+    - name: enable-report
+      type: string
+      default: "true"
+  workspaces:
+    - name: scenarios
+      description: "Git checkout of test scenarios"
+  steps:
+    - name: run-test
+      image: registry.example.com/perf/jmeter-orchestrator:latest
+      script: |
+        #!/usr/bin/env bash
+        set -euo pipefail
+
+        FLAGS="-j $(params.jmx-file) -n $(params.namespace) -i $(params.worker-count)"
+
+        if [ "$(params.enable-csv)" = "true" ]; then
+          FLAGS="${FLAGS} -c"
+        fi
+        if [ "$(params.enable-modules)" = "true" ]; then
+          FLAGS="${FLAGS} -m"
+        fi
+        if [ "$(params.enable-report)" = "true" ]; then
+          FLAGS="${FLAGS} -r"
+        fi
+
+        echo "[INFO] Running: ./run-test.sh ${FLAGS}"
+        cd $(workspaces.scenarios.path)
+        ./scripts/run-test.sh ${FLAGS}
+---
+apiVersion: tekton.dev/v1beta1
+kind: Pipeline
+metadata:
+  name: performance-test-pipeline
+  namespace: perf-testing
+  labels:
+    app.kubernetes.io/part-of: jmeter-platform
+spec:
+  params:
+    - name: git-url
+      type: string
+      description: "Git repository URL containing test scenarios"
+    - name: git-revision
+      type: string
+      default: "main"
+    - name: jmx-file
+      type: string
+    - name: worker-count
+      type: string
+      default: "3"
+  workspaces:
+    - name: shared-workspace
+  tasks:
+    - name: fetch-repo
+      taskRef:
+        name: git-clone
+        kind: ClusterTask
+      workspaces:
+        - name: output
+          workspace: shared-workspace
+      params:
+        - name: url
+          value: $(params.git-url)
+        - name: revision
+          value: $(params.git-revision)
+
+    - name: run-performance-test
+      runAfter: ["fetch-repo"]
+      taskRef:
+        name: jmeter-run-test
+      workspaces:
+        - name: scenarios
+          workspace: shared-workspace
+      params:
+        - name: jmx-file
+          value: $(params.jmx-file)
+        - name: worker-count
+          value: $(params.worker-count)
+        - name: enable-report
+          value: "true"
+---
+apiVersion: tekton.dev/v1beta1
+kind: PipelineRun
+metadata:
+  generateName: perf-test-run-
+  namespace: perf-testing
+  labels:
+    app.kubernetes.io/part-of: jmeter-platform
+spec:
+  pipelineRef:
+    name: performance-test-pipeline
+  params:
+    - name: git-url
+      value: "https://github.com/your-org/perf-scenarios.git"
+    - name: git-revision
+      value: "main"
+    - name: jmx-file
+      value: "example.jmx"
+    - name: worker-count
+      value: "5"
+  workspaces:
+    - name: shared-workspace
+      volumeClaimTemplate:
+        spec:
+          accessModes:
+            - ReadWriteOnce
+          resources:
+            requests:
+              storage: 1Gi

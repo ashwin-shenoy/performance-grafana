@@ -1,0 +1,54 @@
+###############################################################################
+# Grafana Datasource Provisioning — InfluxDB + Prometheus
+###############################################################################
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-datasources
+  namespace: perf-testing
+  labels:
+    app.kubernetes.io/name: grafana
+    app.kubernetes.io/part-of: jmeter-platform
+data:
+  datasources.yaml: |
+    apiVersion: 1
+    datasources:
+      - name: InfluxDB-JMeter
+        type: influxdb
+        access: proxy
+        url: http://influxdb:8086
+        database: jmeter
+        user: jmeter
+        secureJsonData:
+          password: jmeter123
+        isDefault: true
+        editable: true
+
+      - name: Prometheus
+        type: prometheus
+        access: proxy
+        url: http://prometheus-operated:9090
+        isDefault: false
+        editable: true
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboards-provisioning
+  namespace: perf-testing
+  labels:
+    app.kubernetes.io/name: grafana
+    app.kubernetes.io/part-of: jmeter-platform
+data:
+  dashboards.yaml: |
+    apiVersion: 1
+    providers:
+      - name: 'default'
+        orgId: 1
+        folder: 'JMeter'
+        type: file
+        disableDeletion: false
+        updateIntervalSeconds: 30
+        options:
+          path: /var/lib/grafana/dashboards
+          foldersFromFilesStructure: false

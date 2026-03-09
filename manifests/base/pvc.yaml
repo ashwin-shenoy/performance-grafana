@@ -1,0 +1,51 @@
+###############################################################################
+# PersistentVolumeClaims
+# - jmeter-results: stores JTL files and HTML reports across test runs
+# - influxdb-data: persists time-series metrics
+# - grafana-data: persists Grafana dashboards and config
+###############################################################################
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: jmeter-results-pvc
+  namespace: perf-testing
+  labels:
+    app.kubernetes.io/part-of: jmeter-platform
+    app.kubernetes.io/component: storage
+spec:
+  accessModes:
+    - ReadWriteMany          # RWX — needed for controller + report-generator access
+  resources:
+    requests:
+      storage: 10Gi
+  # storageClassName: gp3-csi   # Uncomment and set to your OpenShift StorageClass
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: influxdb-data-pvc
+  namespace: perf-testing
+  labels:
+    app.kubernetes.io/part-of: jmeter-platform
+    app.kubernetes.io/component: influxdb
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: grafana-data-pvc
+  namespace: perf-testing
+  labels:
+    app.kubernetes.io/part-of: jmeter-platform
+    app.kubernetes.io/component: grafana
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 2Gi

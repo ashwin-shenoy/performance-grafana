@@ -1,0 +1,32 @@
+###############################################################################
+# JMeter Workers Headless Service
+# Provides DNS-based discovery for the controller to find all worker IPs
+# The controller uses endpoint addresses to build --remotestart list
+###############################################################################
+apiVersion: v1
+kind: Service
+metadata:
+  name: jmeter-workers-svc
+  namespace: perf-testing
+  labels:
+    app.kubernetes.io/name: jmeter-workers
+    app.kubernetes.io/part-of: jmeter-platform
+    app.kubernetes.io/component: worker
+    jmeter_mode: worker
+spec:
+  clusterIP: None                  # Headless — returns pod IPs directly
+  selector:
+    jmeter_mode: worker
+  ports:
+    - name: rmi-registry
+      port: 1099
+      targetPort: 1099
+      protocol: TCP
+    - name: rmi-data
+      port: 50000
+      targetPort: 50000
+      protocol: TCP
+    - name: jmeter-server
+      port: 4445
+      targetPort: 4445
+      protocol: TCP

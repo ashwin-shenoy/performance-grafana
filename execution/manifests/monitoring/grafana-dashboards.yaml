@@ -1,0 +1,76 @@
+###############################################################################
+# Grafana Datasource + Dashboard Provisioning for Performance Platform
+###############################################################################
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-datasources
+  namespace: perf-testing
+  labels:
+    app.kubernetes.io/part-of: perf-platform
+data:
+  datasources.yaml: |
+    apiVersion: 1
+    datasources:
+      - name: InfluxDB-JMeter
+        type: influxdb
+        access: proxy
+        url: http://influxdb:8086
+        database: jmeter
+        user: jmeter
+        secureJsonData:
+          password: jmeter123
+        isDefault: true
+
+      - name: Prometheus
+        type: prometheus
+        access: proxy
+        url: http://prometheus-operated:9090
+        isDefault: false
+
+      - name: PostgreSQL
+        type: postgres
+        access: proxy
+        url: postgresql:5432
+        database: perfplatform
+        user: perfplatform
+        secureJsonData:
+          password: changeme123
+        jsonData:
+          sslmode: disable
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboards-provisioning
+  namespace: perf-testing
+  labels:
+    app.kubernetes.io/part-of: perf-platform
+data:
+  dashboards.yaml: |
+    apiVersion: 1
+    providers:
+      - name: 'jmeter'
+        orgId: 1
+        folder: 'Performance Testing'
+        type: file
+        disableDeletion: false
+        updateIntervalSeconds: 30
+        options:
+          path: /var/lib/grafana/dashboards
+---
+# Instana integration note:
+# If using Instana, install the Instana agent as a DaemonSet:
+#   helm install instana-agent \
+#     --repo https://agents.instana.io/helm \
+#     instana-agent \
+#     --set agent.key=YOUR_AGENT_KEY \
+#     --set agent.endpointHost=YOUR_ENDPOINT \
+#     --set zone.name=perf-testing \
+#     --namespace instana-agent
+#
+# Instana auto-discovers JVM applications and provides:
+#   - Distributed tracing
+#   - JVM metrics (heap, GC, threads)
+#   - Infrastructure correlation
+#   - Automatic anomaly detection

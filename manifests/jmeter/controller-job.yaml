@@ -1,0 +1,133 @@
+###############################################################################
+# JMeter Controller (Master) — Batch Job
+#
+# The controller orchestrates the distributed test:
+#   1. Waits for load_test script to be injected by the orchestrator
+#   2. Installs required JMeter plugins
+#   3. Waits for all worker pods to have port 1099 open
+#   4. Launches distributed test with --remotestart <worker-list>
+#   5. Stores results on PVC at /report/
+#
+# Runs as a Kubernetes Job (completions: 1, backoffLimit: 0)
+# Pod is NOT restarted on failure — inspect logs for troubleshooting
+###############################################################################
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: jmeter-controller
+  namespace: perf-testing
+  labels:
+    app.kubernetes.io/name: jmeter-controller
+    app.kubernetes.io/part-of: jmeter-platform
+    app.kubernetes.io/component: controller
+    jmeter_mode: controller
+spec:
+  completions: 1
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 3600    # Auto-cleanup after 1 hour
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: jmeter-controller
+        app.kubernetes.io/component: controller
+        jmeter_mode: controller
+      annotations:
+        # Telegraf sidecar injection for JVM monitoring via Jolokia
+        telegraf.influxdata.com/class: "app"
+        telegraf.influxdata.com/inputs: |+
+          [[inputs.jolokia2_agent]]
+            urls = ["http://localhost:8778/jolokia"]
+            [[inputs.jolokia2_agent.metric]]
+              name  = "java_memory"
+              mbean = "java.lang:type=Memory"
+              paths = ["HeapMemoryUsage", "NonHeapMemoryUsage"]
+            [[inputs.jolokia2_agent.metric]]
+              name     = "java_garbage_collector"
+              mbean    = "java.lang:name=*,type=GarbageCollector"
+              paths    = ["CollectionTime", "CollectionCount"]
+              tag_keys = ["name"]
+            [[inputs.jolokia2_agent.metric]]
+              name  = "java_threading"
+              mbean = "java.lang:type=Threading"
+              paths = ["TotalStartedThreadCount", "ThreadCount", "DaemonThreadCount", "PeakThreadCount"]
+    spec:
+      serviceAccountName: jmeter-orchestrator
+      securityContext:
+        runAsNonRoot: true
+        # OpenShift assigns UID dynamically; fsGroup ensures PVC write access
+        fsGroup: 0
+      containers:
+        - name: jmeter-controller
+          image: registry.example.com/perf/jmeter-base:5.6.3    # Replace with your registry
+          imagePullPolicy: Always
+          command: ["/bin/bash"]
+          args:
+            - "-c"
+            - |
+              trap 'exit 0' SIGUSR1
+              echo "[INFO] Controller waiting for load_test script..."
+              until [ -f /opt/jmeter/load_test ]; do sleep 5; done
+              echo "[INFO] Executing load test..."
+              /bin/bash /opt/jmeter/load_test
+          env:
+            - name: MODE
+              value: "CONTROLLER"
+            - name: JVM_ARGS
+              value: "-Xms512m -Xmx1024m"
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          ports:
+            - containerPort: 60000
+              name: jmeter-ctrl
+              protocol: TCP
+          volumeMounts:
+            - name: jmeter-results
+              mountPath: /report
+            - name: tmp-dir
+              mountPath: /tmp/jmeter
+          resources:
+            requests:
+              cpu: "1"
+              memory: "1Gi"
+            limits:
+              cpu: "2"
+              memory: "2Gi"
+          livenessProbe:
+            exec:
+              command: ["cat", "/opt/jmeter/apache-jmeter/bin/jmeter"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          readinessProbe:
+            exec:
+              command: ["cat", "/opt/jmeter/apache-jmeter/bin/jmeter"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+      restartPolicy: Never
+      volumes:
+        - name: jmeter-results
+          persistentVolumeClaim:
+            claimName: jmeter-results-pvc
+        - name: tmp-dir
+          emptyDir: {}
+      # Anti-affinity: don't schedule controller on same node as workers
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: jmeter_mode
+                      operator: In
+                      values: ["worker"]
+                topologyKey: kubernetes.io/hostname

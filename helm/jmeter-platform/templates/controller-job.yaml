@@ -1,0 +1,49 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: jmeter-controller
+  namespace: {{ include "jmeter-platform.namespace" . }}
+  labels:
+    {{- include "jmeter-platform.labels" . | nindent 4 }}
+    jmeter_mode: controller
+spec:
+  completions: 1
+  backoffLimit: 0
+  ttlSecondsAfterFinished: {{ .Values.jmeter.controller.ttlSecondsAfterFinished }}
+  template:
+    metadata:
+      labels:
+        jmeter_mode: controller
+    spec:
+      serviceAccountName: {{ .Values.rbac.serviceAccountName }}
+      securityContext:
+        runAsNonRoot: true
+        fsGroup: 0
+      containers:
+        - name: jmeter-controller
+          image: {{ include "jmeter-platform.jmeterImage" . }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          command: ["/bin/bash"]
+          args:
+            - "-c"
+            - "trap 'exit 0' SIGUSR1 && until [ -f /opt/jmeter/load_test ]; do sleep 5; done && /bin/bash /opt/jmeter/load_test"
+          env:
+            - name: MODE
+              value: "CONTROLLER"
+            - name: JVM_ARGS
+              value: {{ .Values.jmeter.controller.jvmArgs | quote }}
+          volumeMounts:
+            - name: jmeter-results
+              mountPath: /report
+          resources:
+            {{- toYaml .Values.jmeter.controller.resources | nindent 12 }}
+          livenessProbe:
+            exec:
+              command: ["cat", "/opt/jmeter/apache-jmeter/bin/jmeter"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+      restartPolicy: Never
+      volumes:
+        - name: jmeter-results
+          persistentVolumeClaim:
+            claimName: jmeter-results-pvc

@@ -1,0 +1,139 @@
+///////////////////////////////////////////////////////////////////////////////
+// Jenkinsfile — Declarative pipeline for JMeter performance tests
+//
+// Parameters:
+//   JMX_FILE       — JMeter test plan filename
+//   WORKER_COUNT   — Number of JMeter worker pods
+//   NAMESPACE      — Target OpenShift namespace
+//   ENABLE_CSV     — Whether to split/distribute CSV datasets
+//   ENABLE_MODULES — Whether to upload JMeter modules
+//   ENABLE_REPORT  — Generate HTML report after test
+///////////////////////////////////////////////////////////////////////////////
+pipeline {
+    agent {
+        kubernetes {
+            label 'jmeter-orchestrator'
+            defaultContainer 'oc-cli'
+            yaml """
+apiVersion: v1
+kind: Pod
+spec:
+  containers:
+    - name: oc-cli
+      image: registry.redhat.io/openshift4/ose-cli:latest
+      command: ['sleep', 'infinity']
+      resources:
+        requests:
+          cpu: 250m
+          memory: 256Mi
+"""
+        }
+    }
+
+    parameters {
+        string(name: 'JMX_FILE', defaultValue: 'example.jmx', description: 'JMX scenario file')
+        string(name: 'WORKER_COUNT', defaultValue: '3', description: 'Number of JMeter workers')
+        string(name: 'NAMESPACE', defaultValue: 'perf-testing', description: 'OpenShift namespace')
+        booleanParam(name: 'ENABLE_CSV', defaultValue: false, description: 'Split and distribute CSV')
+        booleanParam(name: 'ENABLE_MODULES', defaultValue: false, description: 'Upload JMeter modules')
+        booleanParam(name: 'ENABLE_REPORT', defaultValue: true, description: 'Generate HTML report')
+    }
+
+    environment {
+        TEST_ID = "${BUILD_NUMBER}-${params.JMX_FILE.replace('.jmx', '')}"
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+
+        stage('Validate Scenario') {
+            steps {
+                script {
+                    def jmxDir = params.JMX_FILE.replace('.jmx', '')
+                    def jmxPath = "perf-platform/scenarios/${jmxDir}/${params.JMX_FILE}"
+                    if (!fileExists(jmxPath)) {
+                        error "JMX file not found: ${jmxPath}"
+                    }
+                    echo "Validated scenario: ${jmxPath}"
+                }
+            }
+        }
+
+        stage('Deploy Monitoring Stack') {
+            steps {
+                sh """
+                    oc apply -f perf-platform/manifests/base/ -n ${params.NAMESPACE}
+                    oc apply -f perf-platform/manifests/monitoring/ -n ${params.NAMESPACE}
+                    oc rollout status deployment/influxdb -n ${params.NAMESPACE} --timeout=120s
+                    oc rollout status deployment/grafana -n ${params.NAMESPACE} --timeout=120s
+                """
+            }
+        }
+
+        stage('Run Performance Test') {
+            steps {
+                script {
+                    def flags = "-j ${params.JMX_FILE} -n ${params.NAMESPACE} -i ${params.WORKER_COUNT}"
+                    if (params.ENABLE_CSV)     flags += " -c"
+                    if (params.ENABLE_MODULES) flags += " -m"
+                    if (params.ENABLE_REPORT)  flags += " -r"
+
+                    sh "chmod +x perf-platform/scripts/run-test.sh"
+                    sh "./perf-platform/scripts/run-test.sh ${flags}"
+                }
+            }
+        }
+
+        stage('Wait for Completion') {
+            steps {
+                sh """
+                    echo "Waiting for controller job to complete..."
+                    oc wait --for=condition=complete job/jmeter-controller \
+                        -n ${params.NAMESPACE} --timeout=3600s || true
+                """
+            }
+        }
+
+        stage('Collect Results') {
+            steps {
+                sh """
+                    chmod +x perf-platform/scripts/collect-results.sh
+                    ./perf-platform/scripts/collect-results.sh -n ${params.NAMESPACE} -o results/${TEST_ID}
+                """
+            }
+        }
+
+        stage('Archive Results') {
+            steps {
+                archiveArtifacts artifacts: "results/${TEST_ID}/**", allowEmptyArchive: true
+                publishHTML([
+                    allowMissing: true,
+                    alwaysLinkToLastBuild: true,
+                    keepAll: true,
+                    reportDir: "results/${TEST_ID}/report-*",
+                    reportFiles: 'index.html',
+                    reportName: "JMeter Report - ${TEST_ID}"
+                ])
+            }
+        }
+    }
+
+    post {
+        always {
+            sh """
+                chmod +x perf-platform/scripts/stop-test.sh
+                ./perf-platform/scripts/stop-test.sh -n ${params.NAMESPACE} || true
+            """
+        }
+        failure {
+            echo "Performance test failed. Check logs for details."
+        }
+        success {
+            echo "Performance test completed successfully. Results archived."
+        }
+    }
+}

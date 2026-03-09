@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: perf-testing
+  labels:
+    app.kubernetes.io/managed-by: perf-platform
+    environment: perf
+  annotations:
+    openshift.io/description: "Performance Testing Platform — JMeter + Observability Stack"
+    openshift.io/display-name: "Perf Testing Platform"

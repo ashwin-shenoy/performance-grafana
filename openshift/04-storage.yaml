@@ -1,0 +1,126 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# PersistentVolumeClaims
+# Storage class: managed-nfs-storage (IBM Fyre default)
+# Override STORAGE_CLASS in deploy.sh if your Fyre cluster differs.
+# ─────────────────────────────────────────────────────────────────────────────
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-pvc
+  namespace: perf-testing
+  labels:
+    app: postgresql
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: managed-nfs-storage
+  resources:
+    requests:
+      storage: 10Gi
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: influxdb-pvc
+  namespace: perf-testing
+  labels:
+    app: influxdb
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: managed-nfs-storage
+  resources:
+    requests:
+      storage: 20Gi
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: grafana-pvc
+  namespace: perf-testing
+  labels:
+    app: grafana
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: managed-nfs-storage
+  resources:
+    requests:
+      storage: 2Gi
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: prometheus-pvc
+  namespace: perf-testing
+  labels:
+    app: prometheus
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: managed-nfs-storage
+  resources:
+    requests:
+      storage: 10Gi
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: loki-pvc
+  namespace: perf-testing
+  labels:
+    app: loki
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: managed-nfs-storage
+  resources:
+    requests:
+      storage: 10Gi
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: tempo-pvc
+  namespace: perf-testing
+  labels:
+    app: tempo
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: managed-nfs-storage
+  resources:
+    requests:
+      storage: 10Gi
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: pyroscope-pvc
+  namespace: perf-testing
+  labels:
+    app: pyroscope
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: managed-nfs-storage
+  resources:
+    requests:
+      storage: 5Gi
+
+# Shared RWX volume for JMeter results (controller + workers both write here)
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: jmeter-results-pvc
+  namespace: perf-testing
+  labels:
+    app: jmeter
+spec:
+  accessModes: [ReadWriteMany]
+  storageClassName: managed-nfs-storage
+  resources:
+    requests:
+      storage: 10Gi

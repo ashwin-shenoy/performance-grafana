@@ -1,0 +1,130 @@
+###############################################################################
+# Default values for jmeter-platform Helm chart
+###############################################################################
+
+global:
+  namespace: perf-testing
+  imageRegistry: registry.example.com/perf
+  imagePullPolicy: Always
+
+# --- JMeter Configuration ---
+jmeter:
+  image:
+    repository: jmeter-base
+    tag: "5.6.3"
+
+  controller:
+    resources:
+      requests:
+        cpu: "1"
+        memory: "1Gi"
+      limits:
+        cpu: "2"
+        memory: "2Gi"
+    jvmArgs: "-Xms512m -Xmx1024m"
+    ttlSecondsAfterFinished: 3600
+
+  worker:
+    # Default number of workers (overridden at test time)
+    replicas: 3
+    resources:
+      requests:
+        cpu: "2"
+        memory: "2Gi"
+      limits:
+        cpu: "4"
+        memory: "4Gi"
+    jvmArgs: "-Xms1g -Xmx2g"
+    ttlSecondsAfterFinished: 600
+    # Pod anti-affinity spreads workers across nodes
+    spreadAcrossNodes: true
+    # Tolerate dedicated perf nodes
+    tolerations:
+      - key: "purpose"
+        operator: "Equal"
+        value: "performance-testing"
+        effect: "NoSchedule"
+
+# --- Storage ---
+storage:
+  results:
+    enabled: true
+    size: 10Gi
+    accessMode: ReadWriteMany
+    # storageClassName: ""        # Use cluster default if empty
+  influxdb:
+    size: 10Gi
+  grafana:
+    size: 2Gi
+
+# --- InfluxDB ---
+influxdb:
+  enabled: true
+  image:
+    repository: influxdb
+    tag: "1.8"
+  resources:
+    requests:
+      cpu: "500m"
+      memory: "1Gi"
+    limits:
+      cpu: "1"
+      memory: "2Gi"
+  auth:
+    existingSecret: influxdb-creds
+  database: jmeter
+
+# --- Grafana ---
+grafana:
+  enabled: true
+  image:
+    repository: grafana/grafana
+    tag: "10.2.3"
+  resources:
+    requests:
+      cpu: "250m"
+      memory: "512Mi"
+    limits:
+      cpu: "500m"
+      memory: "1Gi"
+  auth:
+    existingSecret: grafana-creds
+  plugins:
+    - grafana-clock-panel
+    - grafana-piechart-panel
+  # OpenShift Route (set to false for vanilla K8s + Ingress)
+  route:
+    enabled: true
+    tls:
+      termination: edge
+
+# --- Prometheus (uses OpenShift built-in Prometheus Operator) ---
+prometheus:
+  serviceMonitor:
+    enabled: true
+    interval: 15s
+  alerts:
+    enabled: true
+
+# --- Report Generator ---
+reportGenerator:
+  enabled: true
+  image:
+    repository: report-generator
+    tag: "latest"
+  s3:
+    enabled: false
+    bucket: ""
+
+# --- OpenShift Specific ---
+openshift:
+  scc:
+    enabled: true
+    name: jmeter-scc
+  route:
+    enabled: true
+
+# --- RBAC ---
+rbac:
+  create: true
+  serviceAccountName: jmeter-orchestrator

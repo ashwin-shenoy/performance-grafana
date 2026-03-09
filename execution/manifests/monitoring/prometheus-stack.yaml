@@ -1,0 +1,120 @@
+###############################################################################
+# Prometheus Monitoring Stack for Performance Platform
+#
+# Uses OpenShift's built-in Prometheus Operator for:
+# - JMeter pod JVM metrics via Jolokia
+# - Platform API metrics via /metrics endpoint
+# - PrometheusRules for alerting
+###############################################################################
+
+# ServiceMonitor — scrape JMeter worker JVM metrics
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: jmeter-workers-monitor
+  namespace: perf-testing
+  labels:
+    app.kubernetes.io/part-of: perf-platform
+    app.kubernetes.io/component: monitoring
+spec:
+  selector:
+    matchLabels:
+      jmeter_mode: worker
+  endpoints:
+    - port: jolokia
+      path: /jolokia/
+      interval: 15s
+  namespaceSelector:
+    matchNames: [perf-testing]
+---
+# ServiceMonitor — scrape Platform API Prometheus metrics
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: perf-platform-api-monitor
+  namespace: perf-testing
+  labels:
+    app.kubernetes.io/part-of: perf-platform
+    app.kubernetes.io/component: monitoring
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: perf-platform-api
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: 30s
+  namespaceSelector:
+    matchNames: [perf-testing]
+---
+# PodMonitor — scrape all JMeter pods (controller + workers)
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: jmeter-pods-monitor
+  namespace: perf-testing
+  labels:
+    app.kubernetes.io/part-of: perf-platform
+spec:
+  selector:
+    matchExpressions:
+      - key: jmeter_mode
+        operator: In
+        values: [controller, worker]
+  podMetricsEndpoints:
+    - port: jolokia
+      path: /jolokia/
+      interval: 15s
+  namespaceSelector:
+    matchNames: [perf-testing]
+---
+# PrometheusRules — Alerts
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: perf-platform-alerts
+  namespace: perf-testing
+  labels:
+    app.kubernetes.io/part-of: perf-platform
+spec:
+  groups:
+    - name: jmeter.rules
+      rules:
+        - alert: JMeterWorkerOOM
+          expr: |
+            container_memory_working_set_bytes{namespace="perf-testing", container="jmeter-worker"}
+            / container_spec_memory_limit_bytes{namespace="perf-testing", container="jmeter-worker"} > 0.9
+          for: 2m
+          labels:
+            severity: warning
+          annotations:
+            summary: "JMeter worker {{ $labels.pod }} memory > 90%"
+
+        - alert: JMeterWorkerHighCPU
+          expr: |
+            rate(container_cpu_usage_seconds_total{namespace="perf-testing", container="jmeter-worker"}[5m]) > 0.85
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "JMeter worker {{ $labels.pod }} CPU > 85%"
+
+        - alert: PerfPlatformAPIDown
+          expr: up{job="perf-platform-api"} == 0
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Performance Platform API is down"
+
+    - name: platform.rules
+      rules:
+        - alert: TestExecutionStuck
+          expr: |
+            (time() - kube_job_status_start_time{namespace="perf-testing", job_name=~"jmeter-ctrl-.*"}) > 7200
+            and kube_job_status_active{namespace="perf-testing", job_name=~"jmeter-ctrl-.*"} > 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "JMeter test {{ $labels.job_name }} running > 2 hours"

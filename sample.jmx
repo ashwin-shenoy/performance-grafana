@@ -1,0 +1,463 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ============================================================================
+  FILE     : sample.jmx
+  PURPOSE  : Production-ready JMeter test plan for the sample-app service.
+             Streams real-time metrics to InfluxDB 2.x for live Grafana
+             monitoring. Designed to be triggered by the perf-platform API.
+
+  RUNTIME FLAGS (injected by ExecutionService.js):
+    -Jworkload_name   Workload name slug — becomes the InfluxDB "application"
+                      tag on every data point. Used by Grafana var-workload_name.
+    -Jtest_run_id     Execution ID — embedded in testTitle + eventTags so
+                      test start/stop annotation markers are labelled per run.
+    -Jhost            Target host          (default: sample-app)
+    -Jport            Target port          (default: 3002)
+    -Jthreads         Virtual user count   (default: 10)
+    -JrampUp          Ramp-up seconds      (default: 10)
+    -Jduration        Test duration secs   (default: 180)
+
+  INFLUXDB SCHEMA:
+    Measurement : jmeter
+    Tags written per data point:
+      application   = ${workload_name}   <- workload filter in Grafana
+      transaction   = sampler name | "all" | "internal"
+      statut        = "ok" | "ko" | "all"
+    Fields per ~1s interval:
+      avg, min, max, pct90.0, pct95.0, pct99.0   response time (ms)
+      throughput                                   requests/sec
+      hit, count, countError                       sample counts
+      rb, sb                                       bytes in/out
+    Internal (VU concurrency):
+      transaction=internal  fields: minAT, maxAT, meanAT, startedT, endedT
+    Events measurement (start/stop annotations):
+      workload_name + test_run_id tags on every event
+
+  SAMPLERS (5 — e-commerce user journey):
+    1. GET  /health           ~5ms    0%   error  liveness probe
+    2. GET  /api/products     ~150ms  ~5%  error  catalogue browse
+    3. GET  /api/products/:id ~50ms   ~5%  error  product detail
+    4. GET  /api/users/:id    ~70ms   ~5%  error  profile lookup
+    5. POST /api/orders       ~320ms  ~5%  error  place order
+  ============================================================================
+-->
+<jmeterTestPlan version="1.2" properties="5.0" jmeter="5.6.3">
+  <hashTree>
+
+    <!-- ====================================================================
+         TEST PLAN
+         User-Defined Variables read JMeter -J property overrides at runtime.
+         All five variables are injectable without editing this file.
+         ==================================================================== -->
+    <TestPlan guiclass="TestPlanGui" testclass="TestPlan"
+              testname="Sample App Load Test" enabled="true">
+      <boolProp name="TestPlan.functional_mode">false</boolProp>
+      <boolProp name="TestPlan.tearDown_on_shutdown">true</boolProp>
+      <boolProp name="TestPlan.serialize_threadgroups">false</boolProp>
+
+      <elementProp name="TestPlan.user_defined_variables" elementType="Arguments"
+                   guiclass="ArgumentsPanel" testclass="Arguments" enabled="true">
+        <collectionProp name="Arguments.arguments">
+
+          <!-- Target service -->
+          <elementProp name="TARGET_HOST" elementType="Argument">
+            <stringProp name="Argument.name">TARGET_HOST</stringProp>
+            <stringProp name="Argument.value">${__P(host,sample-app)}</stringProp>
+            <stringProp name="Argument.metadata">=</stringProp>
+          </elementProp>
+          <elementProp name="TARGET_PORT" elementType="Argument">
+            <stringProp name="Argument.name">TARGET_PORT</stringProp>
+            <stringProp name="Argument.value">${__P(port,3002)}</stringProp>
+            <stringProp name="Argument.metadata">=</stringProp>
+          </elementProp>
+
+          <!-- Load shape -->
+          <elementProp name="THREADS" elementType="Argument">
+            <stringProp name="Argument.name">THREADS</stringProp>
+            <stringProp name="Argument.value">${__P(threads,10)}</stringProp>
+            <stringProp name="Argument.metadata">=</stringProp>
+          </elementProp>
+          <elementProp name="RAMP_UP" elementType="Argument">
+            <stringProp name="Argument.name">RAMP_UP</stringProp>
+            <stringProp name="Argument.value">${__P(rampUp,10)}</stringProp>
+            <stringProp name="Argument.metadata">=</stringProp>
+          </elementProp>
+          <elementProp name="DURATION" elementType="Argument">
+            <stringProp name="Argument.name">DURATION</stringProp>
+            <stringProp name="Argument.value">${__P(duration,180)}</stringProp>
+            <stringProp name="Argument.metadata">=</stringProp>
+          </elementProp>
+
+          <!-- InfluxDB 2.x write target -->
+          <elementProp name="INFLUXDB_URL" elementType="Argument">
+            <stringProp name="Argument.name">INFLUXDB_URL</stringProp>
+            <stringProp name="Argument.value">${__P(influxdbUrl,http://influxdb:8086/api/v2/write?org=perf-testing&amp;bucket=jmeter)}</stringProp>
+            <stringProp name="Argument.metadata">=</stringProp>
+          </elementProp>
+          <elementProp name="INFLUXDB_TOKEN" elementType="Argument">
+            <stringProp name="Argument.name">INFLUXDB_TOKEN</stringProp>
+            <stringProp name="Argument.value">${__P(influxdbToken,changeme123)}</stringProp>
+            <stringProp name="Argument.metadata">=</stringProp>
+          </elementProp>
+
+          <!-- Workload identity — injected by ExecutionService via -J flags.
+               WORKLOAD_NAME becomes the InfluxDB "application" tag on every
+               data point. Grafana filters the dashboard by this value using
+               the var-workload_name URL parameter. -->
+          <elementProp name="WORKLOAD_NAME" elementType="Argument">
+            <stringProp name="Argument.name">WORKLOAD_NAME</stringProp>
+            <stringProp name="Argument.value">${__P(workload_name,sample-app)}</stringProp>
+            <stringProp name="Argument.metadata">=</stringProp>
+          </elementProp>
+          <elementProp name="TEST_RUN_ID" elementType="Argument">
+            <stringProp name="Argument.name">TEST_RUN_ID</stringProp>
+            <stringProp name="Argument.value">${__P(test_run_id,0)}</stringProp>
+            <stringProp name="Argument.metadata">=</stringProp>
+          </elementProp>
+
+        </collectionProp>
+      </elementProp>
+      <stringProp name="TestPlan.comments">
+        E-commerce load test. Metrics stream to InfluxDB tagged with
+        workload_name and test_run_id for Grafana filtering.
+      </stringProp>
+    </TestPlan>
+    <hashTree>
+
+      <!-- ====================================================================
+           THREAD GROUP
+           loops=-1 with scheduler=true → runs until DURATION seconds elapse.
+           on_sample_error=continue → keep load running through ~5% app errors.
+           ==================================================================== -->
+      <ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup"
+                   testname="Virtual Users" enabled="true">
+        <stringProp name="ThreadGroup.on_sample_error">continue</stringProp>
+        <elementProp name="ThreadGroup.main_controller" elementType="LoopController"
+                     guiclass="LoopControlPanel" testclass="LoopController" enabled="true">
+          <boolProp name="LoopController.continue_forever">false</boolProp>
+          <intProp name="LoopController.loops">-1</intProp>
+        </elementProp>
+        <stringProp name="ThreadGroup.num_threads">${THREADS}</stringProp>
+        <stringProp name="ThreadGroup.ramp_time">${RAMP_UP}</stringProp>
+        <boolProp name="ThreadGroup.scheduler">true</boolProp>
+        <stringProp name="ThreadGroup.duration">${DURATION}</stringProp>
+        <stringProp name="ThreadGroup.delay">0</stringProp>
+        <boolProp name="ThreadGroup.same_user_on_next_iteration">true</boolProp>
+      </ThreadGroup>
+      <hashTree>
+
+        <!-- HTTP Request Defaults — all samplers inherit these -->
+        <ConfigTestElement guiclass="HttpDefaultsGui" testclass="ConfigTestElement"
+                           testname="HTTP Request Defaults" enabled="true">
+          <elementProp name="HTTPsampler.Arguments" elementType="Arguments"
+                       guiclass="HTTPArgumentsPanel" testclass="Arguments" enabled="true">
+            <collectionProp name="Arguments.arguments"/>
+          </elementProp>
+          <stringProp name="HTTPSampler.domain">${TARGET_HOST}</stringProp>
+          <stringProp name="HTTPSampler.port">${TARGET_PORT}</stringProp>
+          <stringProp name="HTTPSampler.protocol">http</stringProp>
+          <stringProp name="HTTPSampler.contentEncoding">UTF-8</stringProp>
+          <stringProp name="HTTPSampler.path"/>
+          <boolProp name="HTTPSampler.image_parser">false</boolProp>
+          <boolProp name="HTTPSampler.concurrentDwn">false</boolProp>
+          <stringProp name="HTTPSampler.connect_timeout">5000</stringProp>
+          <stringProp name="HTTPSampler.response_timeout">15000</stringProp>
+        </ConfigTestElement>
+        <hashTree/>
+
+        <!-- JSON Accept/Content-Type headers for all requests -->
+        <HeaderManager guiclass="HeaderPanel" testclass="HeaderManager"
+                       testname="HTTP Headers" enabled="true">
+          <collectionProp name="HeaderManager.headers">
+            <elementProp name="" elementType="Header">
+              <stringProp name="Header.name">Content-Type</stringProp>
+              <stringProp name="Header.value">application/json</stringProp>
+            </elementProp>
+            <elementProp name="" elementType="Header">
+              <stringProp name="Header.name">Accept</stringProp>
+              <stringProp name="Header.value">application/json</stringProp>
+            </elementProp>
+          </collectionProp>
+        </HeaderManager>
+        <hashTree/>
+
+        <!-- ==============================================================
+             SAMPLER 1 — GET /health
+             Fastest endpoint (~5ms, 0% error). Strict 200 assertion so any
+             degradation of the health endpoint is immediately visible as an
+             error spike in the Grafana countError panel.
+             ============================================================== -->
+        <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy"
+                          testname="GET /health" enabled="true">
+          <elementProp name="HTTPsampler.Arguments" elementType="Arguments"
+                       guiclass="HTTPArgumentsPanel" testclass="Arguments" enabled="true">
+            <collectionProp name="Arguments.arguments"/>
+          </elementProp>
+          <stringProp name="HTTPSampler.path">/health</stringProp>
+          <stringProp name="HTTPSampler.method">GET</stringProp>
+          <boolProp name="HTTPSampler.follow_redirects">true</boolProp>
+          <boolProp name="HTTPSampler.auto_redirects">false</boolProp>
+          <boolProp name="HTTPSampler.use_keepalive">true</boolProp>
+          <boolProp name="HTTPSampler.DO_MULTIPART_POST">false</boolProp>
+        </HTTPSamplerProxy>
+        <hashTree>
+          <ResponseAssertion guiclass="AssertionGui" testclass="ResponseAssertion"
+                             testname="Expect 200" enabled="true">
+            <collectionProp name="Asserion.test_strings">
+              <stringProp name="49586">200</stringProp>
+            </collectionProp>
+            <stringProp name="Assertion.custom_message">Health check must return HTTP 200</stringProp>
+            <stringProp name="Assertion.test_field">Assertion.response_code</stringProp>
+            <boolProp name="Assertion.assume_success">false</boolProp>
+            <intProp name="Assertion.test_type">8</intProp>
+          </ResponseAssertion>
+          <hashTree/>
+        </hashTree>
+
+        <UniformRandomTimer guiclass="UniformRandomTimerGui" testclass="UniformRandomTimer"
+                            testname="Think Time 200-500ms" enabled="true">
+          <stringProp name="ConstantTimer.delay">200</stringProp>
+          <stringProp name="RandomTimer.range">300</stringProp>
+        </UniformRandomTimer>
+        <hashTree/>
+
+        <!-- ==============================================================
+             SAMPLER 2 — GET /api/products
+             Medium latency (~150ms). App injects ~5% 503 errors so the
+             Grafana error-rate panel always has something to show.
+             ============================================================== -->
+        <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy"
+                          testname="GET /api/products" enabled="true">
+          <elementProp name="HTTPsampler.Arguments" elementType="Arguments"
+                       guiclass="HTTPArgumentsPanel" testclass="Arguments" enabled="true">
+            <collectionProp name="Arguments.arguments"/>
+          </elementProp>
+          <stringProp name="HTTPSampler.path">/api/products</stringProp>
+          <stringProp name="HTTPSampler.method">GET</stringProp>
+          <boolProp name="HTTPSampler.follow_redirects">true</boolProp>
+          <boolProp name="HTTPSampler.auto_redirects">false</boolProp>
+          <boolProp name="HTTPSampler.use_keepalive">true</boolProp>
+          <boolProp name="HTTPSampler.DO_MULTIPART_POST">false</boolProp>
+        </HTTPSamplerProxy>
+        <hashTree/>
+
+        <UniformRandomTimer guiclass="UniformRandomTimerGui" testclass="UniformRandomTimer"
+                            testname="Think Time 500-1200ms" enabled="true">
+          <stringProp name="ConstantTimer.delay">500</stringProp>
+          <stringProp name="RandomTimer.range">700</stringProp>
+        </UniformRandomTimer>
+        <hashTree/>
+
+        <!-- ==============================================================
+             SAMPLER 3 — GET /api/products/:id
+             __Random(1,5,productId) picks a random ID and stores it in
+             ${productId} for reuse in the POST /api/orders sampler below,
+             creating a coherent browse-then-buy user journey.
+             ============================================================== -->
+        <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy"
+                          testname="GET /api/products/:id" enabled="true">
+          <elementProp name="HTTPsampler.Arguments" elementType="Arguments"
+                       guiclass="HTTPArgumentsPanel" testclass="Arguments" enabled="true">
+            <collectionProp name="Arguments.arguments"/>
+          </elementProp>
+          <stringProp name="HTTPSampler.path">/api/products/${__Random(1,5,productId)}</stringProp>
+          <stringProp name="HTTPSampler.method">GET</stringProp>
+          <boolProp name="HTTPSampler.follow_redirects">true</boolProp>
+          <boolProp name="HTTPSampler.auto_redirects">false</boolProp>
+          <boolProp name="HTTPSampler.use_keepalive">true</boolProp>
+          <boolProp name="HTTPSampler.DO_MULTIPART_POST">false</boolProp>
+        </HTTPSamplerProxy>
+        <hashTree/>
+
+        <UniformRandomTimer guiclass="UniformRandomTimerGui" testclass="UniformRandomTimer"
+                            testname="Think Time 800-2000ms" enabled="true">
+          <stringProp name="ConstantTimer.delay">800</stringProp>
+          <stringProp name="RandomTimer.range">1200</stringProp>
+        </UniformRandomTimer>
+        <hashTree/>
+
+        <!-- ==============================================================
+             SAMPLER 4 — GET /api/users/:id
+             Simulates a logged-in user checking their profile / address
+             before completing a purchase.
+             ============================================================== -->
+        <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy"
+                          testname="GET /api/users/:id" enabled="true">
+          <elementProp name="HTTPsampler.Arguments" elementType="Arguments"
+                       guiclass="HTTPArgumentsPanel" testclass="Arguments" enabled="true">
+            <collectionProp name="Arguments.arguments"/>
+          </elementProp>
+          <stringProp name="HTTPSampler.path">/api/users/${__Random(1,1000,userId)}</stringProp>
+          <stringProp name="HTTPSampler.method">GET</stringProp>
+          <boolProp name="HTTPSampler.follow_redirects">true</boolProp>
+          <boolProp name="HTTPSampler.auto_redirects">false</boolProp>
+          <boolProp name="HTTPSampler.use_keepalive">true</boolProp>
+          <boolProp name="HTTPSampler.DO_MULTIPART_POST">false</boolProp>
+        </HTTPSamplerProxy>
+        <hashTree/>
+
+        <UniformRandomTimer guiclass="UniformRandomTimerGui" testclass="UniformRandomTimer"
+                            testname="Think Time 400-800ms" enabled="true">
+          <stringProp name="ConstantTimer.delay">400</stringProp>
+          <stringProp name="RandomTimer.range">400</stringProp>
+        </UniformRandomTimer>
+        <hashTree/>
+
+        <!-- ==============================================================
+             SAMPLER 5 — POST /api/orders
+             Heaviest endpoint (~320ms). Reuses ${productId} from Sampler 3.
+             test_type=40 (OR) accepts both 201 (success) and 500 (simulated
+             payment timeout ~5%) so the test keeps running while errors are
+             counted in InfluxDB countError for the Grafana error panels.
+             ============================================================== -->
+        <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy"
+                          testname="POST /api/orders" enabled="true">
+          <boolProp name="HTTPSampler.postBodyRaw">true</boolProp>
+          <elementProp name="HTTPsampler.Arguments" elementType="Arguments"
+                       guiclass="HTTPArgumentsPanel" testclass="Arguments" enabled="true">
+            <collectionProp name="Arguments.arguments">
+              <elementProp name="" elementType="HTTPArgument">
+                <boolProp name="HTTPArgument.always_encode">false</boolProp>
+                <stringProp name="Argument.value">{"productId": ${productId}, "quantity": ${__Random(1,3,qty)}}</stringProp>
+                <stringProp name="Argument.metadata">=</stringProp>
+              </elementProp>
+            </collectionProp>
+          </elementProp>
+          <stringProp name="HTTPSampler.path">/api/orders</stringProp>
+          <stringProp name="HTTPSampler.method">POST</stringProp>
+          <boolProp name="HTTPSampler.follow_redirects">true</boolProp>
+          <boolProp name="HTTPSampler.auto_redirects">false</boolProp>
+          <boolProp name="HTTPSampler.use_keepalive">true</boolProp>
+          <boolProp name="HTTPSampler.DO_MULTIPART_POST">false</boolProp>
+        </HTTPSamplerProxy>
+        <hashTree>
+          <ResponseAssertion guiclass="AssertionGui" testclass="ResponseAssertion"
+                             testname="Assert 201 or 500" enabled="true">
+            <collectionProp name="Asserion.test_strings">
+              <stringProp name="49586">201</stringProp>
+              <stringProp name="49587">500</stringProp>
+            </collectionProp>
+            <stringProp name="Assertion.custom_message">Order must return 201 or 500 (simulated error)</stringProp>
+            <stringProp name="Assertion.test_field">Assertion.response_code</stringProp>
+            <boolProp name="Assertion.assume_success">false</boolProp>
+            <intProp name="Assertion.test_type">40</intProp>
+          </ResponseAssertion>
+          <hashTree/>
+        </hashTree>
+
+        <UniformRandomTimer guiclass="UniformRandomTimerGui" testclass="UniformRandomTimer"
+                            testname="Think Time 300-700ms" enabled="true">
+          <stringProp name="ConstantTimer.delay">300</stringProp>
+          <stringProp name="RandomTimer.range">400</stringProp>
+        </UniformRandomTimer>
+        <hashTree/>
+
+        <!-- ====================================================================
+             BACKEND LISTENER — InfluxDB 2.x real-time metrics
+             ====================================================================
+
+             application  = ${WORKLOAD_NAME}
+               -> InfluxDB "application" tag on EVERY data point.
+               -> The Grafana dashboard variable $workload_name filters by this.
+               -> Injected at runtime via -Jworkload_name=<slug>
+
+             testTitle    = "Run #${TEST_RUN_ID}"
+               -> Labels the testStarted / testEnded event annotations.
+               -> Visible in Grafana as vertical markers during the test.
+
+             eventTags    = "workload_name=X,test_run_id=Y"
+               -> Extra tags on the events measurement (start/stop markers).
+               -> Lets you cross-reference annotations across multiple runs.
+
+             percentiles  = 90;95;99
+               -> Written as pct90.0, pct95.0, pct99.0 in InfluxDB.
+               -> Queried by the P90/P95/P99 panels in the dashboard.
+             ==================================================================== -->
+        <BackendListener guiclass="BackendListenerGui" testclass="BackendListener"
+                         testname="InfluxDB 2.x Backend Listener" enabled="true">
+          <elementProp name="arguments" elementType="Arguments"
+                       guiclass="ArgumentsPanel" testclass="Arguments"
+                       testname="User Defined Variables" enabled="true">
+            <collectionProp name="Arguments.arguments">
+
+              <elementProp name="influxdbMetricsSender" elementType="Argument">
+                <stringProp name="Argument.name">influxdbMetricsSender</stringProp>
+                <stringProp name="Argument.value">org.apache.jmeter.visualizers.backend.influxdb.HttpMetricsSender</stringProp>
+                <stringProp name="Argument.metadata">=</stringProp>
+              </elementProp>
+
+              <elementProp name="influxdbUrl" elementType="Argument">
+                <stringProp name="Argument.name">influxdbUrl</stringProp>
+                <stringProp name="Argument.value">${INFLUXDB_URL}</stringProp>
+                <stringProp name="Argument.metadata">=</stringProp>
+              </elementProp>
+
+              <elementProp name="influxdbToken" elementType="Argument">
+                <stringProp name="Argument.name">influxdbToken</stringProp>
+                <stringProp name="Argument.value">${INFLUXDB_TOKEN}</stringProp>
+                <stringProp name="Argument.metadata">=</stringProp>
+              </elementProp>
+
+              <!-- application = workload_name slug.
+                   This is the ONLY InfluxDB tag applied to every metric data
+                   point by the built-in listener. The Grafana dashboard uses
+                   schema.tagValues(tag:"application") to populate the
+                   $workload_name variable dropdown. -->
+              <elementProp name="application" elementType="Argument">
+                <stringProp name="Argument.name">application</stringProp>
+                <stringProp name="Argument.value">${WORKLOAD_NAME}</stringProp>
+                <stringProp name="Argument.metadata">=</stringProp>
+              </elementProp>
+
+              <elementProp name="measurement" elementType="Argument">
+                <stringProp name="Argument.name">measurement</stringProp>
+                <stringProp name="Argument.value">jmeter</stringProp>
+                <stringProp name="Argument.metadata">=</stringProp>
+              </elementProp>
+
+              <!-- false = per-sampler rows + aggregate "all" row.
+                   Gives Grafana the per-endpoint breakdown panels. -->
+              <elementProp name="summaryOnly" elementType="Argument">
+                <stringProp name="Argument.name">summaryOnly</stringProp>
+                <stringProp name="Argument.value">false</stringProp>
+                <stringProp name="Argument.metadata">=</stringProp>
+              </elementProp>
+
+              <elementProp name="samplersRegex" elementType="Argument">
+                <stringProp name="Argument.name">samplersRegex</stringProp>
+                <stringProp name="Argument.value">.*</stringProp>
+                <stringProp name="Argument.metadata">=</stringProp>
+              </elementProp>
+
+              <!-- P90 = pct90.0, P95 = pct95.0, P99 = pct99.0 in InfluxDB -->
+              <elementProp name="percentiles" elementType="Argument">
+                <stringProp name="Argument.name">percentiles</stringProp>
+                <stringProp name="Argument.value">90;95;99</stringProp>
+                <stringProp name="Argument.metadata">=</stringProp>
+              </elementProp>
+
+              <!-- testTitle labels the testStarted/testEnded event annotations -->
+              <elementProp name="testTitle" elementType="Argument">
+                <stringProp name="Argument.name">testTitle</stringProp>
+                <stringProp name="Argument.value">Run #${TEST_RUN_ID}</stringProp>
+                <stringProp name="Argument.metadata">=</stringProp>
+              </elementProp>
+
+              <!-- eventTags are additional tags on start/stop event annotations.
+                   Allows filtering Grafana annotations by workload + run ID. -->
+              <elementProp name="eventTags" elementType="Argument">
+                <stringProp name="Argument.name">eventTags</stringProp>
+                <stringProp name="Argument.value">workload_name=${WORKLOAD_NAME},test_run_id=${TEST_RUN_ID}</stringProp>
+                <stringProp name="Argument.metadata">=</stringProp>
+              </elementProp>
+
+            </collectionProp>
+          </elementProp>
+          <stringProp name="classname">org.apache.jmeter.visualizers.backend.influxdb.InfluxdbBackendListenerClient</stringProp>
+        </BackendListener>
+        <hashTree/>
+
+      </hashTree>
+    </hashTree>
+  </hashTree>
+</jmeterTestPlan>

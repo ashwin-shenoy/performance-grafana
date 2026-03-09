@@ -1,0 +1,125 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Service Accounts & RBAC
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── perf-platform SA: used by all long-running workloads ─────────────────────
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: perf-platform
+  namespace: perf-testing
+  labels:
+    app.kubernetes.io/managed-by: perf-platform
+
+# ── jmeter-orchestrator SA: used by the API to create Jobs ───────────────────
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: jmeter-orchestrator
+  namespace: perf-testing
+  labels:
+    app.kubernetes.io/managed-by: perf-platform
+
+# ── promtail SA: needs to list/watch pods for metadata enrichment ─────────────
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: promtail
+  namespace: perf-testing
+  labels:
+    app.kubernetes.io/managed-by: perf-platform
+
+# ── Role: jmeter-orchestrator can manage Jobs and Pods ───────────────────────
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: jmeter-orchestrator
+  namespace: perf-testing
+rules:
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["create", "get", "list", "watch", "delete", "patch"]
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "pods/exec"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+  - apiGroups: [""]
+    resources: ["services", "configmaps"]
+    verbs: ["get", "list", "watch"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: jmeter-orchestrator
+  namespace: perf-testing
+subjects:
+  - kind: ServiceAccount
+    name: jmeter-orchestrator
+    namespace: perf-testing
+  - kind: ServiceAccount
+    name: perf-platform
+    namespace: perf-testing
+roleRef:
+  kind: Role
+  name: jmeter-orchestrator
+  apiGroup: rbac.authorization.k8s.io
+
+# ── ClusterRole: promtail needs cluster-wide pod listing ─────────────────────
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: promtail-perf
+rules:
+  - apiGroups: [""]
+    resources: ["nodes", "nodes/proxy", "services", "endpoints", "pods"]
+    verbs: ["get", "list", "watch"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: promtail-perf
+subjects:
+  - kind: ServiceAccount
+    name: promtail
+    namespace: perf-testing
+roleRef:
+  kind: ClusterRole
+  name: promtail-perf
+  apiGroup: rbac.authorization.k8s.io
+
+# ── SCC bindings ──────────────────────────────────────────────────────────────
+# anyuid-perf → perf-platform SA (postgres, grafana, influxdb, pyroscope)
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: anyuid-perf-platform
+subjects:
+  - kind: ServiceAccount
+    name: perf-platform
+    namespace: perf-testing
+roleRef:
+  kind: ClusterRole
+  name: system:openshift:scc:anyuid-perf
+  apiGroup: rbac.authorization.k8s.io
+
+# hostaccess-perf → promtail SA
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: hostaccess-perf-promtail
+subjects:
+  - kind: ServiceAccount
+    name: promtail
+    namespace: perf-testing
+roleRef:
+  kind: ClusterRole
+  name: system:openshift:scc:hostaccess-perf
+  apiGroup: rbac.authorization.k8s.io

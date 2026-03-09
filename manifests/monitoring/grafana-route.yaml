@@ -1,0 +1,23 @@
+###############################################################################
+# OpenShift Route — Exposes Grafana externally with TLS edge termination
+# For vanilla Kubernetes, replace with an Ingress resource
+###############################################################################
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: grafana
+  namespace: perf-testing
+  labels:
+    app.kubernetes.io/name: grafana
+    app.kubernetes.io/part-of: jmeter-platform
+spec:
+  to:
+    kind: Service
+    name: grafana
+    weight: 100
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+  wildcardPolicy: None

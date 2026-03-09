@@ -1,0 +1,63 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: jmeter-workers
+  namespace: {{ include "jmeter-platform.namespace" . }}
+  labels:
+    {{- include "jmeter-platform.labels" . | nindent 4 }}
+    jmeter_mode: worker
+spec:
+  backoffLimit: 0
+  parallelism: 0
+  ttlSecondsAfterFinished: {{ .Values.jmeter.worker.ttlSecondsAfterFinished }}
+  template:
+    metadata:
+      labels:
+        jmeter_mode: worker
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        fsGroup: 0
+      containers:
+        - name: jmeter-worker
+          image: {{ include "jmeter-platform.jmeterImage" . }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          command: ["/bin/bash"]
+          args:
+            - "-c"
+            - "trap 'exit 0' SIGUSR1 && while true; do sleep 30; done"
+          env:
+            - name: MODE
+              value: "WORKER"
+            - name: JVM_ARGS
+              value: {{ .Values.jmeter.worker.jvmArgs | quote }}
+          ports:
+            - containerPort: 1099
+              name: jmeter-rmi
+            - containerPort: 50000
+              name: jmeter-data
+          resources:
+            {{- toYaml .Values.jmeter.worker.resources | nindent 12 }}
+          livenessProbe:
+            exec:
+              command: ["cat", "/opt/jmeter/apache-jmeter/bin/jmeter"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+      restartPolicy: Never
+      {{- if .Values.jmeter.worker.spreadAcrossNodes }}
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: jmeter_mode
+                      operator: In
+                      values: ["worker"]
+                topologyKey: kubernetes.io/hostname
+      {{- end }}
+      {{- with .Values.jmeter.worker.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

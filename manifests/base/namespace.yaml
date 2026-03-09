@@ -1,0 +1,14 @@
+###############################################################################
+# Namespace — Isolated environment for performance tests
+# Each test suite or team can get their own namespace for isolation
+###############################################################################
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: perf-testing
+  labels:
+    app.kubernetes.io/part-of: jmeter-platform
+    purpose: performance-testing
+  annotations:
+    openshift.io/description: "Performance testing platform — JMeter distributed load testing"
+    openshift.io/display-name: "Performance Testing"

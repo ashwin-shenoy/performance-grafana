@@ -1,0 +1,86 @@
+###############################################################################
+# Grafana Dashboard ConfigMap — JMeter Results Dashboard
+# This is a simplified version; import full dashboards from Grafana.com
+# Recommended dashboard IDs:
+#   - JMeter Load Test: 5496
+#   - Kubernetes Cluster: 7249
+#   - JVM Monitoring: 3066
+###############################################################################
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboards
+  namespace: perf-testing
+  labels:
+    app.kubernetes.io/name: grafana
+    app.kubernetes.io/part-of: jmeter-platform
+data:
+  jmeter-results.json: |
+    {
+      "annotations": { "list": [] },
+      "editable": true,
+      "fiscalYearStartMonth": 0,
+      "graphTooltip": 1,
+      "links": [],
+      "panels": [
+        {
+          "title": "Active Threads Over Time",
+          "type": "timeseries",
+          "datasource": "InfluxDB-JMeter",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+          "targets": [
+            {
+              "query": "SELECT mean(\"maxAT\") FROM \"jmeter\" WHERE $timeFilter GROUP BY time($__interval)",
+              "rawQuery": true,
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "title": "Response Times (Avg, P90, P95, P99)",
+          "type": "timeseries",
+          "datasource": "InfluxDB-JMeter",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+          "targets": [
+            {
+              "query": "SELECT mean(\"avg\") as \"avg\", mean(\"pct90.0\") as \"p90\", mean(\"pct95.0\") as \"p95\", mean(\"pct99.0\") as \"p99\" FROM \"jmeter\" WHERE $timeFilter GROUP BY time($__interval)",
+              "rawQuery": true,
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "title": "Throughput (req/s)",
+          "type": "timeseries",
+          "datasource": "InfluxDB-JMeter",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+          "targets": [
+            {
+              "query": "SELECT sum(\"count\") / $__interval_ms * 1000 FROM \"jmeter\" WHERE $timeFilter GROUP BY time($__interval)",
+              "rawQuery": true,
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "title": "Error Rate (%)",
+          "type": "stat",
+          "datasource": "InfluxDB-JMeter",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+          "targets": [
+            {
+              "query": "SELECT sum(\"countError\") / sum(\"count\") * 100 FROM \"jmeter\" WHERE $timeFilter GROUP BY time($__interval)",
+              "rawQuery": true,
+              "refId": "A"
+            }
+          ]
+        }
+      ],
+      "schemaVersion": 38,
+      "style": "dark",
+      "tags": ["jmeter", "performance"],
+      "templating": { "list": [] },
+      "time": { "from": "now-1h", "to": "now" },
+      "title": "JMeter Test Results",
+      "uid": "jmeter-results"
+    }

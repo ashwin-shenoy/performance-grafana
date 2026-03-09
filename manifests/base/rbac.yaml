@@ -1,0 +1,59 @@
+###############################################################################
+# RBAC — ServiceAccount + Role + RoleBinding for test orchestration
+# The orchestrator needs to create/delete jobs, read pods, copy files
+###############################################################################
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: jmeter-orchestrator
+  namespace: perf-testing
+  labels:
+    app.kubernetes.io/part-of: jmeter-platform
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: jmeter-orchestrator-role
+  namespace: perf-testing
+  labels:
+    app.kubernetes.io/part-of: jmeter-platform
+rules:
+  # Manage JMeter jobs (create, delete, patch, list)
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Read/exec into pods for file copy and test control
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create"]
+  # Read endpoints for slave discovery
+  - apiGroups: [""]
+    resources: ["endpoints", "services"]
+    verbs: ["get", "list", "watch"]
+  # Read secrets for Grafana creds etc.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get"]
+  # ConfigMaps for test configuration
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "create", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: jmeter-orchestrator-binding
+  namespace: perf-testing
+  labels:
+    app.kubernetes.io/part-of: jmeter-platform
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: jmeter-orchestrator-role
+subjects:
+  - kind: ServiceAccount
+    name: jmeter-orchestrator
+    namespace: perf-testing

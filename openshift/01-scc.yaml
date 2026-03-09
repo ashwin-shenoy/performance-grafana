@@ -1,0 +1,88 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# SecurityContextConstraints
+# ─────────────────────────────────────────────────────────────────────────────
+# anyuid-perf: for images that need a fixed UID (postgres:999, grafana:472,
+#              influxdb:1000, pyroscope).  Bound to the perf-platform SA.
+---
+apiVersion: security.openshift.io/v1
+kind: SecurityContextConstraints
+metadata:
+  name: anyuid-perf
+  annotations:
+    kubernetes.io/description: >
+      Allows any UID for perf-platform services that ship with fixed UIDs
+      (PostgreSQL 999, Grafana 472, InfluxDB 1000).
+allowPrivilegeEscalation: false
+allowPrivilegedContainer: false
+allowedCapabilities: []
+defaultAddCapabilities: []
+requiredDropCapabilities:
+  - KILL
+  - MKNOD
+  - SETUID
+  - SETGID
+fsGroup:
+  type: MustRunAs
+  ranges:
+    - min: 1
+      max: 65535
+runAsUser:
+  type: RunAsAny
+seLinuxContext:
+  type: MustRunAs
+supplementalGroups:
+  type: RunAsAny
+volumes:
+  - configMap
+  - downwardAPI
+  - emptyDir
+  - persistentVolumeClaim
+  - projected
+  - secret
+users: []
+groups: []
+
+---
+# hostaccess-perf: for promtail which needs to read host /var/log/pods
+apiVersion: security.openshift.io/v1
+kind: SecurityContextConstraints
+metadata:
+  name: hostaccess-perf
+  annotations:
+    kubernetes.io/description: >
+      Allows promtail to read host log paths (/var/log/pods).
+allowPrivilegeEscalation: false
+allowPrivilegedContainer: false
+allowHostDirVolumePlugin: true
+allowHostIPC: false
+allowHostNetwork: false
+allowHostPID: false
+allowHostPorts: false
+allowedCapabilities: []
+defaultAddCapabilities: []
+requiredDropCapabilities:
+  - KILL
+  - MKNOD
+  - SETUID
+  - SETGID
+fsGroup:
+  type: MustRunAs
+  ranges:
+    - min: 1
+      max: 65535
+runAsUser:
+  type: RunAsAny
+seLinuxContext:
+  type: MustRunAs
+supplementalGroups:
+  type: RunAsAny
+volumes:
+  - configMap
+  - downwardAPI
+  - emptyDir
+  - hostPath
+  - persistentVolumeClaim
+  - projected
+  - secret
+users: []
+groups: []

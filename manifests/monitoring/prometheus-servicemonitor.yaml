@@ -1,0 +1,87 @@
+###############################################################################
+# Prometheus ServiceMonitor — Scrapes JMeter JVM metrics via Jolokia
+# Requires Prometheus Operator (included in OpenShift Monitoring)
+#
+# Also includes a PodMonitor for dynamic worker pod discovery
+###############################################################################
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: jmeter-workers-monitor
+  namespace: perf-testing
+  labels:
+    app.kubernetes.io/name: jmeter-workers
+    app.kubernetes.io/part-of: jmeter-platform
+    app.kubernetes.io/component: monitoring
+spec:
+  selector:
+    matchLabels:
+      jmeter_mode: worker
+  endpoints:
+    - port: jolokia
+      path: /jolokia/
+      interval: 15s
+      scheme: http
+  namespaceSelector:
+    matchNames:
+      - perf-testing
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: jmeter-pods-monitor
+  namespace: perf-testing
+  labels:
+    app.kubernetes.io/part-of: jmeter-platform
+    app.kubernetes.io/component: monitoring
+spec:
+  selector:
+    matchExpressions:
+      - key: jmeter_mode
+        operator: In
+        values: ["controller", "worker"]
+  podMetricsEndpoints:
+    - port: jolokia
+      path: /jolokia/
+      interval: 15s
+  namespaceSelector:
+    matchNames:
+      - perf-testing
+---
+###############################################################################
+# PrometheusRule — Alerts for test health
+###############################################################################
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: jmeter-alerts
+  namespace: perf-testing
+  labels:
+    app.kubernetes.io/part-of: jmeter-platform
+spec:
+  groups:
+    - name: jmeter.rules
+      rules:
+        - alert: JMeterWorkerPodOOM
+          expr: |
+            container_memory_working_set_bytes{namespace="perf-testing", container="jmeter-worker"}
+            / container_spec_memory_limit_bytes{namespace="perf-testing", container="jmeter-worker"}
+            > 0.9
+          for: 2m
+          labels:
+            severity: warning
+          annotations:
+            summary: "JMeter worker pod {{ $labels.pod }} is near OOM (>90% memory)"
+            description: "Consider increasing memory limits or reducing thread count."
+
+        - alert: JMeterWorkerHighCPU
+          expr: |
+            rate(container_cpu_usage_seconds_total{namespace="perf-testing", container="jmeter-worker"}[5m])
+            / container_spec_cpu_quota{namespace="perf-testing", container="jmeter-worker"}
+            * container_spec_cpu_period{namespace="perf-testing", container="jmeter-worker"}
+            > 0.85
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "JMeter worker {{ $labels.pod }} CPU > 85%"

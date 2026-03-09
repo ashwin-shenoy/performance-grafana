@@ -1,0 +1,83 @@
+###############################################################################
+# GitLab CI/CD Pipeline for JMeter Performance Tests on OpenShift
+###############################################################################
+variables:
+  NAMESPACE: "perf-testing"
+  WORKER_COUNT: "3"
+  JMX_FILE: "example.jmx"
+  ENABLE_CSV: "false"
+  ENABLE_MODULES: "false"
+  ENABLE_REPORT: "true"
+
+stages:
+  - validate
+  - deploy-infra
+  - test
+  - collect
+  - cleanup
+
+.openshift_login: &openshift_login
+  before_script:
+    - oc login --token=${OPENSHIFT_TOKEN} --server=${OPENSHIFT_API_URL} --insecure-skip-tls-verify=true
+    - oc project ${NAMESPACE}
+
+validate-scenario:
+  stage: validate
+  image: alpine:3.19
+  script:
+    - |
+      JMX_DIR="${JMX_FILE%.*}"
+      if [ ! -f "perf-platform/scenarios/${JMX_DIR}/${JMX_FILE}" ]; then
+        echo "ERROR: JMX file not found"
+        exit 1
+      fi
+      echo "Scenario validated: ${JMX_FILE}"
+
+deploy-monitoring:
+  stage: deploy-infra
+  image: registry.redhat.io/openshift4/ose-cli:latest
+  <<: *openshift_login
+  script:
+    - oc apply -f perf-platform/manifests/base/ -n ${NAMESPACE}
+    - oc apply -f perf-platform/manifests/monitoring/ -n ${NAMESPACE}
+    - oc rollout status deployment/influxdb -n ${NAMESPACE} --timeout=120s
+    - oc rollout status deployment/grafana -n ${NAMESPACE} --timeout=120s
+
+run-performance-test:
+  stage: test
+  image: registry.redhat.io/openshift4/ose-cli:latest
+  <<: *openshift_login
+  script:
+    - chmod +x perf-platform/scripts/run-test.sh
+    - |
+      FLAGS="-j ${JMX_FILE} -n ${NAMESPACE} -i ${WORKER_COUNT}"
+      [ "${ENABLE_CSV}" = "true" ] && FLAGS="${FLAGS} -c"
+      [ "${ENABLE_MODULES}" = "true" ] && FLAGS="${FLAGS} -m"
+      [ "${ENABLE_REPORT}" = "true" ] && FLAGS="${FLAGS} -r"
+      ./perf-platform/scripts/run-test.sh ${FLAGS}
+    - |
+      echo "Waiting for test completion..."
+      oc wait --for=condition=complete job/jmeter-controller \
+        -n ${NAMESPACE} --timeout=3600s || true
+  timeout: 2h
+
+collect-results:
+  stage: collect
+  image: registry.redhat.io/openshift4/ose-cli:latest
+  <<: *openshift_login
+  script:
+    - chmod +x perf-platform/scripts/collect-results.sh
+    - ./perf-platform/scripts/collect-results.sh -n ${NAMESPACE} -o results/${CI_PIPELINE_ID}
+  artifacts:
+    paths:
+      - results/
+    expire_in: 30 days
+
+cleanup:
+  stage: cleanup
+  image: registry.redhat.io/openshift4/ose-cli:latest
+  <<: *openshift_login
+  script:
+    - chmod +x perf-platform/scripts/stop-test.sh
+    - ./perf-platform/scripts/stop-test.sh -n ${NAMESPACE} || true
+  when: always

@@ -1,0 +1,40 @@
+apiVersion: 1
+
+datasources:
+  # ── JMeter metrics via InfluxDB 2.x (Flux query language) ─────────────────
+  #
+  # JMeter's built-in InfluxdbBackendListenerClient writes to bucket "jmeter"
+  # using the v2 write API: /api/v2/write?org=perf-testing&bucket=jmeter
+  #
+  # Key tags on every data point:
+  #   application  = workload_name   (set by -Jworkload_name at runtime)
+  #   transaction  = sampler name, "all" (aggregate), or "internal" (VU count)
+  #   statut       = "ok" | "ko" | "all"
+  #
+  # Key fields per sampler per ~1s interval:
+  #   avg, min, max                   response time distribution (ms)
+  #   pct90.0, pct95.0, pct99.0      percentile response times (ms)
+  #   throughput                      requests per second
+  #   hit, count, countError          sample counts + error count
+  #   rb, sb                          received / sent bytes
+  #
+  # Internal (VU concurrency):
+  #   transaction=internal, fields: minAT, maxAT, meanAT, startedT, endedT
+  #
+  # Events (test start/stop annotations):
+  #   measurement=events, tags: application, title, fields: text, tags
+  # ───────────────────────────────────────────────────────────────────────────
+  - name: InfluxDB-JMeter
+    uid:  influxdb-jmeter-ds
+    type: influxdb
+    access: proxy
+    url: http://influxdb:8086
+    isDefault: true
+    editable: true
+    jsonData:
+      version:       Flux
+      organization:  perf-testing
+      defaultBucket: jmeter
+      tlsSkipVerify: true
+    secureJsonData:
+      token: changeme123

@@ -1,0 +1,127 @@
+###############################################################################
+# Performance Platform — API Service Deployment
+# Runs the Node.js backend that orchestrates JMeter tests
+###############################################################################
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: perf-platform-api
+  namespace: perf-testing
+  labels:
+    app.kubernetes.io/name: perf-platform-api
+    app.kubernetes.io/part-of: perf-platform
+    app.kubernetes.io/component: backend
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: perf-platform-api
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: perf-platform-api
+        app.kubernetes.io/component: backend
+    spec:
+      serviceAccountName: jmeter-orchestrator
+      securityContext:
+        runAsNonRoot: true
+        fsGroup: 0
+      containers:
+        - name: api
+          image: registry.example.com/perf/perf-platform-api:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8080
+              name: http
+            - containerPort: 9090
+              name: metrics
+          env:
+            - name: NODE_ENV
+              value: "production"
+            - name: PORT
+              value: "8080"
+            - name: DB_HOST
+              value: "postgresql"
+            - name: DB_PORT
+              value: "5432"
+            - name: DB_NAME
+              value: "perfplatform"
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: postgresql-creds
+                  key: username
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgresql-creds
+                  key: password
+            - name: KUBE_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: JMETER_IMAGE
+              value: "registry.example.com/perf/jmeter-base:5.6.3"
+            - name: RESULTS_PVC
+              value: "jmeter-results-pvc"
+          volumeMounts:
+            - name: results
+              mountPath: /report
+              readOnly: true
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+            limits:
+              cpu: "500m"
+              memory: "1Gi"
+          readinessProbe:
+            httpGet:
+              path: /api/v1/health/ready
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /api/v1/health
+              port: 8080
+            initialDelaySeconds: 15
+            periodSeconds: 30
+      volumes:
+        - name: results
+          persistentVolumeClaim:
+            claimName: jmeter-results-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: perf-platform-api
+  namespace: perf-testing
+  labels:
+    app.kubernetes.io/name: perf-platform-api
+    app.kubernetes.io/part-of: perf-platform
+spec:
+  selector:
+    app.kubernetes.io/name: perf-platform-api
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+    - name: metrics
+      port: 9090
+      targetPort: 9090
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: perf-platform-api
+  namespace: perf-testing
+spec:
+  to:
+    kind: Service
+    name: perf-platform-api
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect

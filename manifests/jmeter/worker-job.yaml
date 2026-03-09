@@ -1,0 +1,130 @@
+###############################################################################
+# JMeter Workers (Slaves) — Batch Job with Dynamic Parallelism
+#
+# Workers are the actual load injectors. Each worker:
+#   1. Starts and waits for the injector script to be copied in
+#   2. Installs JMeter plugins required by the JMX
+#   3. Starts jmeter-server on port 1099 (RMI)
+#   4. Exposes Jolokia on port 8778 for JVM monitoring
+#
+# Scaling: The orchestrator patches parallelism to desired injector count
+#   kubectl patch job jmeter-workers -p '{"spec":{"parallelism": N}}'
+#
+# Resource requests trigger cluster autoscaler if nodes are insufficient
+###############################################################################
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: jmeter-workers
+  namespace: perf-testing
+  labels:
+    app.kubernetes.io/name: jmeter-workers
+    app.kubernetes.io/part-of: jmeter-platform
+    app.kubernetes.io/component: worker
+    jmeter_mode: worker
+spec:
+  backoffLimit: 0
+  parallelism: 0                    # Start at 0; orchestrator scales up
+  ttlSecondsAfterFinished: 600      # Auto-cleanup 10 min after completion
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: jmeter-workers
+        app.kubernetes.io/component: worker
+        jmeter_mode: worker
+      annotations:
+        telegraf.influxdata.com/class: "app"
+        telegraf.influxdata.com/inputs: |+
+          [[inputs.jolokia2_agent]]
+            urls = ["http://localhost:8778/jolokia"]
+            [[inputs.jolokia2_agent.metric]]
+              name  = "java_memory"
+              mbean = "java.lang:type=Memory"
+              paths = ["HeapMemoryUsage", "NonHeapMemoryUsage"]
+            [[inputs.jolokia2_agent.metric]]
+              name     = "java_garbage_collector"
+              mbean    = "java.lang:name=*,type=GarbageCollector"
+              paths    = ["CollectionTime", "CollectionCount"]
+              tag_keys = ["name"]
+            [[inputs.jolokia2_agent.metric]]
+              name  = "java_threading"
+              mbean = "java.lang:type=Threading"
+              paths = ["TotalStartedThreadCount", "ThreadCount", "DaemonThreadCount", "PeakThreadCount"]
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        fsGroup: 0
+      containers:
+        - name: jmeter-worker
+          image: registry.example.com/perf/jmeter-base:5.6.3    # Replace with your registry
+          imagePullPolicy: Always
+          command: ["/bin/bash"]
+          args:
+            - "-c"
+            - |
+              trap 'exit 0' SIGUSR1
+              echo "[INFO] Worker pod ready, waiting for injector script..."
+              while true; do sleep 30; done
+          env:
+            - name: MODE
+              value: "WORKER"
+            - name: JVM_ARGS
+              value: "-Xms1g -Xmx2g"
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          ports:
+            - containerPort: 1099
+              name: jmeter-rmi
+              protocol: TCP
+            - containerPort: 50000
+              name: jmeter-data
+              protocol: TCP
+            - containerPort: 4445
+              name: jmeter-srv
+              protocol: TCP
+            - containerPort: 8778
+              name: jolokia
+              protocol: TCP
+          volumeMounts:
+            - name: tmp-dir
+              mountPath: /tmp/jmeter
+          resources:
+            requests:
+              cpu: "2"
+              memory: "2Gi"
+            limits:
+              cpu: "4"
+              memory: "4Gi"
+          livenessProbe:
+            exec:
+              command: ["cat", "/opt/jmeter/apache-jmeter/bin/jmeter"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+      restartPolicy: Never
+      volumes:
+        - name: tmp-dir
+          emptyDir: {}
+      # Spread workers across nodes for realistic load distribution
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: jmeter_mode
+                      operator: In
+                      values: ["worker"]
+                topologyKey: kubernetes.io/hostname
+      # Tolerate dedicated perf-testing nodes if tainted
+      tolerations:
+        - key: "purpose"
+          operator: "Equal"
+          value: "performance-testing"
+          effect: "NoSchedule"

@@ -1,0 +1,17 @@
+apiVersion: v2
+name: jmeter-platform
+description: Production-ready distributed JMeter load testing platform for OpenShift/Kubernetes
+type: application
+version: 1.0.0
+appVersion: "5.6.3"
+keywords:
+  - jmeter
+  - performance-testing
+  - load-testing
+  - openshift
+  - kubernetes
+maintainers:
+  - name: Performance Engineering Team
+home: https://github.com/your-org/jmeter-platform
+sources:
+  - https://github.com/Rbillon59/jmeter-k8s-starterkit

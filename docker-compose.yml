@@ -1,0 +1,194 @@
+###############################################################################
+# Minimal JMeter Performance Platform
+#
+# Services (6 total — all others removed):
+#   postgresql   5432  — test-run metadata store
+#   api          8080  — REST API + JMeter orchestration
+#   ui           3000  — Next.js frontend
+#   influxdb     8086  — JMeter metrics time-series store
+#   grafana      3001  — Live dashboards
+#   sample-app   3002  — Load test target application
+#
+# JMeter containers are created on-demand by the API (LOCAL_MODE=true).
+# They join this network via Docker socket and are auto-removed on finish.
+#
+# Usage:
+#   docker compose up -d
+#   docker compose logs -f api
+#   docker compose down -v   # removes volumes too
+###############################################################################
+
+version: '3.9'
+
+services:
+
+  # ── PostgreSQL ─────────────────────────────────────────────────────────────
+  postgresql:
+    image: postgres:15-alpine
+    container_name: perf-platform-db
+    environment:
+      POSTGRES_USER:     perfplatform
+      POSTGRES_PASSWORD: changeme123
+      POSTGRES_DB:       perfplatform
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./database/001_initial_schema.sql:/docker-entrypoint-initdb.d/001_initial_schema.sql
+      - ./database/002_enterprise_observability.sql:/docker-entrypoint-initdb.d/002_enterprise_observability.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U perfplatform"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - perf-platform
+    platform: linux/arm64
+
+  # ── Backend API ────────────────────────────────────────────────────────────
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: perf-platform-api
+    user: root   # required for Docker socket access in LOCAL_MODE
+    depends_on:
+      postgresql:
+        condition: service_healthy
+    environment:
+      NODE_ENV:         production
+      PORT:             8080
+      DB_HOST:          postgresql
+      DB_PORT:          5432
+      DB_NAME:          perfplatform
+      DB_USER:          perfplatform
+      DB_PASSWORD:      changeme123
+      JMETER_IMAGE:     perf-platform-jmeter
+      RESULTS_PATH:     /report
+      LOG_LEVEL:        info
+      LOCAL_MODE:       "true"
+      API_CONTAINER:    perf-platform-api
+      DOCKER_NETWORK:   perf-platform_perf-platform
+      # Grafana URL used to build scoped dashboard links per test run
+      GRAFANA_EXTERNAL_URL: http://localhost:3001
+    ports:
+      - "8080:8080"
+    volumes:
+      - jmeter-results:/report
+      - /var/run/docker.sock:/var/run/docker.sock
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/api/v1/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - perf-platform
+    platform: linux/arm64
+
+  # ── Frontend UI ────────────────────────────────────────────────────────────
+  ui:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: http://localhost:8080/api/v1
+        INTERNAL_API_URL:    http://perf-platform-api:8080
+    container_name: perf-platform-ui
+    depends_on:
+      - api
+    environment:
+      NODE_ENV:         production
+      INTERNAL_API_URL: http://perf-platform-api:8080
+    ports:
+      - "3000:3000"
+    networks:
+      - perf-platform
+    platform: linux/arm64
+
+  # ── InfluxDB 2.x ──────────────────────────────────────────────────────────
+  # Receives JMeter BackendListener metrics in real-time.
+  # Bucket "jmeter" stores one row per sampler per ~1s interval with tags:
+  #   application  = workload_name  (set by ExecutionService via -Jworkload_name)
+  #   transaction  = sampler name / "all" / "internal"
+  #   statut       = "ok" | "ko" | "all"
+  influxdb:
+    image: influxdb:2.7-alpine
+    container_name: perf-platform-influxdb
+    environment:
+      DOCKER_INFLUXDB_INIT_MODE:        setup
+      DOCKER_INFLUXDB_INIT_USERNAME:    admin
+      DOCKER_INFLUXDB_INIT_PASSWORD:    changeme123
+      DOCKER_INFLUXDB_INIT_ORG:         perf-testing
+      DOCKER_INFLUXDB_INIT_BUCKET:      jmeter
+      DOCKER_INFLUXDB_INIT_RETENTION:   720h
+      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: changeme123
+    ports:
+      - "8086:8086"
+    volumes:
+      - influxdb-data:/var/lib/influxdb2
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8086/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - perf-platform
+    platform: linux/arm64
+
+  # ── Grafana ────────────────────────────────────────────────────────────────
+  # Provisioned with:
+  #   - datasources/influxdb.yml  → InfluxDB-JMeter datasource (Flux)
+  #   - dashboards/jmeter-perf.json → filterable by workload_name + test_run_id
+  grafana:
+    image: grafana/grafana:10.2.2
+    container_name: perf-platform-grafana
+    depends_on:
+      influxdb:
+        condition: service_healthy
+    environment:
+      GF_SECURITY_ADMIN_USER:     admin
+      GF_SECURITY_ADMIN_PASSWORD: changeme123
+      GF_AUTH_ANONYMOUS_ENABLED:  "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_PATHS_PROVISIONING:      /etc/grafana/provisioning
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /etc/grafana/provisioning/dashboards/jmeter-perf.json
+    ports:
+      - "3001:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana/provisioning/datasources:/etc/grafana/provisioning/datasources
+      - ./grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - perf-platform
+    platform: linux/arm64
+
+  # ── Sample App (load test target) ─────────────────────────────────────────
+  # Simple e-commerce REST API with realistic latency + ~5% error rate.
+  # JMeter tests hit this service at sample-app:3002 (Docker internal DNS).
+  sample-app:
+    build:
+      context: ./sample-app
+      dockerfile: Dockerfile
+    container_name: perf-sample-app
+    environment:
+      PORT: 3002
+    ports:
+      - "3002:3002"
+    networks:
+      - perf-platform
+    platform: linux/arm64
+
+volumes:
+  postgres-data:
+  influxdb-data:
+  grafana-data:
+  jmeter-results:
+
+networks:
+  perf-platform:
+    driver: bridge

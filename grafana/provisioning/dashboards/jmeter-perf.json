@@ -1,0 +1,556 @@
+{
+  "id": null,
+  "uid": "jmeter-perf",
+  "title": "JMeter Performance Dashboard",
+  "description": "Live JMeter load test metrics from InfluxDB 2.x. Select a workload to filter all panels. The test_run_id and time range are pre-filled when you open Grafana from a test run.",
+  "tags": ["jmeter", "performance", "load-test"],
+  "timezone": "browser",
+  "schemaVersion": 38,
+  "version": 1,
+  "refresh": "5s",
+  "time": { "from": "now-1h", "to": "now" },
+  "timepicker": {},
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "editable": true,
+  "style": "dark",
+  "links": [],
+
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": { "type": "grafana", "uid": "-- Grafana --" },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      },
+      {
+        "datasource": { "type": "influxdb", "uid": "influxdb-jmeter-ds" },
+        "enable": true,
+        "hide": false,
+        "iconColor": "orange",
+        "name": "Test Start / Stop",
+        "rawQuery": "from(bucket: \"jmeter\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"events\")\n  |> filter(fn: (r) => r.application == \"${workload_name}\")\n  |> keep(columns: [\"_time\", \"_value\", \"title\"])",
+        "type": "query"
+      }
+    ]
+  },
+
+  "templating": {
+    "list": [
+      {
+        "name": "workload_name",
+        "label": "Workload",
+        "description": "Filter by workload (maps to the InfluxDB application tag).",
+        "type": "query",
+        "datasource": { "type": "influxdb", "uid": "influxdb-jmeter-ds" },
+        "query": "import \"influxdata/influxdb/schema\"\nschema.tagValues(bucket: \"jmeter\", tag: \"application\")",
+        "refresh": 2,
+        "sort": 1,
+        "includeAll": true,
+        "allValue": ".*",
+        "multi": false,
+        "current": {},
+        "options": [],
+        "hide": 0
+      },
+      {
+        "name": "test_run_id",
+        "label": "Test Run ID",
+        "description": "Execution ID (pre-filled from the platform run URL). Used for reference only — filter by time range to isolate a specific run.",
+        "type": "textbox",
+        "query": "",
+        "current": { "value": "", "text": "" },
+        "options": [{ "selected": true, "text": "", "value": "" }],
+        "hide": 0
+      }
+    ]
+  },
+
+  "panels": [
+
+    {
+      "id": 1,
+      "type": "text",
+      "title": "",
+      "gridPos": { "x": 0, "y": 0, "w": 24, "h": 1 },
+      "options": {
+        "mode": "html",
+        "content": "<div style=\"display:flex;align-items:center;gap:16px;padding:4px 0;\"><span style=\"font-size:13px;color:#adb5bd;\">Workload: <b style=\"color:#f8f9fa;\">${workload_name}</b></span><span style=\"font-size:13px;color:#adb5bd;\">Run ID: <b style=\"color:#f8f9fa;\">${test_run_id}</b></span><span style=\"font-size:12px;color:#6c757d;\">Metrics update every 5s · InfluxDB bucket: jmeter · application tag = workload_name</span></div>"
+      },
+      "transparent": true
+    },
+
+    {
+      "id": 10,
+      "type": "stat",
+      "title": "Total Requests",
+      "description": "Total number of samples collected for this workload in the selected time window.",
+      "gridPos": { "x": 0, "y": 1, "w": 4, "h": 4 },
+      "datasource": { "type": "influxdb", "uid": "influxdb-jmeter-ds" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "blue", "value": null }] },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "influxdb", "uid": "influxdb-jmeter-ds" },
+          "query": "from(bucket: \"jmeter\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"jmeter\")\n  |> filter(fn: (r) => r.application == \"${workload_name}\")\n  |> filter(fn: (r) => r.statut == \"all\" and r.transaction == \"all\" and r._field == \"hit\")\n  |> sum()"
+        }
+      ]
+    },
+
+    {
+      "id": 11,
+      "type": "stat",
+      "title": "Error Rate",
+      "description": "Average error rate across all samples in the selected window.",
+      "gridPos": { "x": 4, "y": 1, "w": 4, "h": 4 },
+      "datasource": { "type": "influxdb", "uid": "influxdb-jmeter-ds" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 2,
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 1 },
+              { "color": "red", "value": 5 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["mean"], "fields": "", "values": false },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "influxdb", "uid": "influxdb-jmeter-ds" },
+          "query": "from(bucket: \"jmeter\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"jmeter\")\n  |> filter(fn: (r) => r.application == \"${workload_name}\")\n  |> filter(fn: (r) => r.statut == \"all\" and r.transaction == \"all\")\n  |> filter(fn: (r) => r._field == \"countError\" or r._field == \"hit\")\n  |> pivot(rowKey: [\"_time\", \"application\", \"transaction\", \"statut\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n  |> map(fn: (r) => ({r with _value: if exists r.hit and r.hit > 0.0 then r.countError / r.hit * 100.0 else 0.0, _field: \"error_rate_pct\"}))\n  |> mean(column: \"_value\")"
+        }
+      ]
+    },
+
+    {
+      "id": 12,
+      "type": "stat",
+      "title": "Avg Response Time",
+      "description": "Mean response time across all transactions in the selected window.",
+      "gridPos": { "x": 8, "y": 1, "w": 4, "h": 4 },
+      "datasource": { "type": "influxdb", "uid": "influxdb-jmeter-ds" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 500 },
+              { "color": "red", "value": 1000 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["mean"], "fields": "", "values": false },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "influxdb", "uid": "influxdb-jmeter-ds" },
+          "query": "from(bucket: \"jmeter\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"jmeter\")\n  |> filter(fn: (r) => r.application == \"${workload_name}\")\n  |> filter(fn: (r) => r.statut == \"all\" and r.transaction == \"all\" and r._field == \"avg\")\n  |> mean()"
+        }
+      ]
+    },
+
+    {
+      "id": 13,
+      "type": "stat",
+      "title": "P95 Response Time",
+      "description": "95th percentile response time — the SLO reference metric.",
+      "gridPos": { "x": 12, "y": 1, "w": 4, "h": 4 },
+      "datasource": { "type": "influxdb", "uid": "influxdb-jmeter-ds" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 800 },
+              { "color": "red", "value": 2000 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["mean"], "fields": "", "values": false },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "influxdb", "uid": "influxdb-jmeter-ds" },
+          "query": "from(bucket: \"jmeter\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"jmeter\")\n  |> filter(fn: (r) => r.application == \"${workload_name}\")\n  |> filter(fn: (r) => r.statut == \"all\" and r.transaction == \"all\" and r._field == \"pct95.0\")\n  |> mean()"
+        }
+      ]
+    },
+
+    {
+      "id": 14,
+      "type": "stat",
+      "title": "Throughput",
+      "description": "Mean requests per second across the test window.",
+      "gridPos": { "x": 16, "y": 1, "w": 4, "h": 4 },
+      "datasource": { "type": "influxdb", "uid": "influxdb-jmeter-ds" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "decimals": 1,
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "blue", "value": null }] }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["mean"], "fields": "", "values": false },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "influxdb", "uid": "influxdb-jmeter-ds" },
+          "query": "from(bucket: \"jmeter\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"jmeter\")\n  |> filter(fn: (r) => r.application == \"${workload_name}\")\n  |> filter(fn: (r) => r.statut == \"all\" and r.transaction == \"all\" and r._field == \"throughput\")\n  |> mean()"
+        }
+      ]
+    },
+
+    {
+      "id": 15,
+      "type": "stat",
+      "title": "Peak Virtual Users",
+      "description": "Maximum concurrent virtual users seen during the test.",
+      "gridPos": { "x": 20, "y": 1, "w": 4, "h": 4 },
+      "datasource": { "type": "influxdb", "uid": "influxdb-jmeter-ds" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "purple", "value": null }] }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["max"], "fields": "", "values": false },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "influxdb", "uid": "influxdb-jmeter-ds" },
+          "query": "from(bucket: \"jmeter\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"jmeter\")\n  |> filter(fn: (r) => r.application == \"${workload_name}\")\n  |> filter(fn: (r) => r.transaction == \"internal\" and r._field == \"maxAT\")\n  |> max()"
+        }
+      ]
+    },
+
+    {
+      "id": 20,
+      "type": "timeseries",
+      "title": "Response Time — Avg / P90 / P95 / P99 (all transactions)",
+      "description": "Aggregated response time percentiles across all samplers. Filtered by workload_name (application tag).",
+      "gridPos": { "x": 0, "y": 5, "w": 16, "h": 9 },
+      "datasource": { "type": "influxdb", "uid": "influxdb-jmeter-ds" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "gradientMode": "none",
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "color": { "mode": "palette-classic" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
+        },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "avg" },    "properties": [{ "id": "displayName", "value": "Avg" },  { "id": "color", "value": { "fixedColor": "#73BF69", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "pct90.0" },"properties": [{ "id": "displayName", "value": "P90" },  { "id": "color", "value": { "fixedColor": "#FADE2A", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "pct95.0" },"properties": [{ "id": "displayName", "value": "P95" },  { "id": "color", "value": { "fixedColor": "#FF9830", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "pct99.0" },"properties": [{ "id": "displayName", "value": "P99" },  { "id": "color", "value": { "fixedColor": "#F2495C", "mode": "fixed" } }] }
+        ]
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "calcs": ["mean", "max"] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "influxdb", "uid": "influxdb-jmeter-ds" },
+          "query": "from(bucket: \"jmeter\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"jmeter\")\n  |> filter(fn: (r) => r.application == \"${workload_name}\")\n  |> filter(fn: (r) => r.statut == \"all\" and r.transaction == \"all\")\n  |> filter(fn: (r) => r._field == \"avg\" or r._field == \"pct90.0\" or r._field == \"pct95.0\" or r._field == \"pct99.0\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> yield(name: \"response_times\")"
+        }
+      ]
+    },
+
+    {
+      "id": 21,
+      "type": "timeseries",
+      "title": "Active Virtual Users",
+      "description": "Number of concurrent JMeter threads actively running. Source: internal measurement, maxAT field.",
+      "gridPos": { "x": 16, "y": 5, "w": 8, "h": 9 },
+      "datasource": { "type": "influxdb", "uid": "influxdb-jmeter-ds" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 20,
+            "gradientMode": "opacity",
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "color": { "fixedColor": "#B877D9", "mode": "fixed" },
+          "displayName": "VUs"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "calcs": ["max"] },
+        "tooltip": { "mode": "single", "sort": "none" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "influxdb", "uid": "influxdb-jmeter-ds" },
+          "query": "from(bucket: \"jmeter\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"jmeter\")\n  |> filter(fn: (r) => r.application == \"${workload_name}\")\n  |> filter(fn: (r) => r.transaction == \"internal\" and r._field == \"maxAT\")\n  |> aggregateWindow(every: v.windowPeriod, fn: max, createEmpty: false)\n  |> yield(name: \"active_vus\")"
+        }
+      ]
+    },
+
+    {
+      "id": 30,
+      "type": "timeseries",
+      "title": "Throughput — Requests/sec by Endpoint",
+      "description": "Per-sampler requests per second. Shows which endpoints receive the most load.",
+      "gridPos": { "x": 0, "y": 14, "w": 12, "h": 8 },
+      "datasource": { "type": "influxdb", "uid": "influxdb-jmeter-ds" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "decimals": 2,
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 5,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "color": { "mode": "palette-classic" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max"] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "influxdb", "uid": "influxdb-jmeter-ds" },
+          "query": "from(bucket: \"jmeter\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"jmeter\")\n  |> filter(fn: (r) => r.application == \"${workload_name}\")\n  |> filter(fn: (r) => r.statut == \"all\" and r.transaction != \"all\" and r.transaction != \"internal\")\n  |> filter(fn: (r) => r._field == \"throughput\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> yield(name: \"throughput\")"
+        }
+      ]
+    },
+
+    {
+      "id": 31,
+      "type": "timeseries",
+      "title": "Error Count by Endpoint",
+      "description": "Number of failed samples per interval per sampler. Source: countError field (statut=all).",
+      "gridPos": { "x": 12, "y": 14, "w": 12, "h": 8 },
+      "datasource": { "type": "influxdb", "uid": "influxdb-jmeter-ds" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 15,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "color": { "mode": "palette-classic" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["sum", "max"] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "influxdb", "uid": "influxdb-jmeter-ds" },
+          "query": "from(bucket: \"jmeter\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"jmeter\")\n  |> filter(fn: (r) => r.application == \"${workload_name}\")\n  |> filter(fn: (r) => r.statut == \"all\" and r.transaction != \"all\" and r.transaction != \"internal\")\n  |> filter(fn: (r) => r._field == \"countError\")\n  |> aggregateWindow(every: v.windowPeriod, fn: sum, createEmpty: false)\n  |> yield(name: \"errors\")"
+        }
+      ]
+    },
+
+    {
+      "id": 40,
+      "type": "timeseries",
+      "title": "Avg Response Time — Per Endpoint",
+      "description": "Mean response time per sampler. Lets you identify which endpoint is the bottleneck.",
+      "gridPos": { "x": 0, "y": 22, "w": 12, "h": 8 },
+      "datasource": { "type": "influxdb", "uid": "influxdb-jmeter-ds" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 5,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "color": { "mode": "palette-classic" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max"] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "influxdb", "uid": "influxdb-jmeter-ds" },
+          "query": "from(bucket: \"jmeter\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"jmeter\")\n  |> filter(fn: (r) => r.application == \"${workload_name}\")\n  |> filter(fn: (r) => r.statut == \"all\" and r.transaction != \"all\" and r.transaction != \"internal\")\n  |> filter(fn: (r) => r._field == \"avg\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> yield(name: \"avg_rt_per_endpoint\")"
+        }
+      ]
+    },
+
+    {
+      "id": 41,
+      "type": "timeseries",
+      "title": "P95 Response Time — Per Endpoint",
+      "description": "95th percentile response time per sampler over time.",
+      "gridPos": { "x": 12, "y": 22, "w": 12, "h": 8 },
+      "datasource": { "type": "influxdb", "uid": "influxdb-jmeter-ds" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 5,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "color": { "mode": "palette-classic" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max"] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "influxdb", "uid": "influxdb-jmeter-ds" },
+          "query": "from(bucket: \"jmeter\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"jmeter\")\n  |> filter(fn: (r) => r.application == \"${workload_name}\")\n  |> filter(fn: (r) => r.statut == \"all\" and r.transaction != \"all\" and r.transaction != \"internal\")\n  |> filter(fn: (r) => r._field == \"pct95.0\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> yield(name: \"p95_per_endpoint\")"
+        }
+      ]
+    },
+
+    {
+      "id": 50,
+      "type": "timeseries",
+      "title": "Error Rate % — Over Time (all transactions)",
+      "description": "Percentage of failed samples per interval. Red threshold at 1%.",
+      "gridPos": { "x": 0, "y": 30, "w": 24, "h": 7 },
+      "datasource": { "type": "influxdb", "uid": "influxdb-jmeter-ds" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 2,
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 20,
+            "gradientMode": "opacity",
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "color": { "fixedColor": "#F2495C", "mode": "fixed" },
+          "displayName": "Error Rate %",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green",  "value": null },
+              { "color": "yellow", "value": 1 },
+              { "color": "red",    "value": 5 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "calcs": ["mean", "max"] },
+        "tooltip": { "mode": "single", "sort": "none" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "influxdb", "uid": "influxdb-jmeter-ds" },
+          "query": "from(bucket: \"jmeter\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"jmeter\")\n  |> filter(fn: (r) => r.application == \"${workload_name}\")\n  |> filter(fn: (r) => r.statut == \"all\" and r.transaction == \"all\")\n  |> filter(fn: (r) => r._field == \"countError\" or r._field == \"hit\")\n  |> pivot(rowKey: [\"_time\", \"application\", \"transaction\", \"statut\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n  |> map(fn: (r) => ({r with _value: if exists r.hit and r.hit > 0.0 then r.countError / r.hit * 100.0 else 0.0, _field: \"error_rate_pct\"}))\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> yield(name: \"error_rate\")"
+        }
+      ]
+    }
+
+  ]
+}
