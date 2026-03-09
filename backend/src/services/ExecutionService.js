@@ -1,9 +1,10 @@
 /**
  * ExecutionService — Core test execution engine
  *
- * Two execution modes:
- *   LOCAL_MODE=true  → runs JMeter directly via Docker socket (docker-compose dev)
- *   LOCAL_MODE unset → dispatches to Kubernetes (production / OpenShift)
+ * Three execution modes:
+ *   STANDALONE_MODE=true → runs JMeter binary directly on the host via child_process.spawn
+ *   LOCAL_MODE=true      → runs JMeter via Docker socket (docker-compose dev)
+ *   (default)            → dispatches to Kubernetes (production / OpenShift)
  *
  * InfluxDB tagging strategy:
  *   Every JMeter data point carries:
@@ -26,19 +27,28 @@
  */
 'use strict';
 
-const fs = require('fs');
+const fs      = require('fs');
+const path    = require('path');
+const { spawn } = require('child_process');
 const TestExecution  = require('../models/TestExecution');
 const TestPlan       = require('../models/TestPlan');
 const KubernetesService = require('./KubernetesService');
 const logger         = require('../utils/logger');
 const { parseJtl }   = require('../utils/jtlParser');
 
-const LOCAL_MODE      = process.env.LOCAL_MODE === 'true';
+const STANDALONE_MODE = process.env.STANDALONE_MODE === 'true';
+const LOCAL_MODE      = !STANDALONE_MODE && process.env.LOCAL_MODE === 'true';
 const DEFAULT_NS      = process.env.KUBE_NAMESPACE || 'perf-testing';
 const JMETER_IMAGE    = process.env.JMETER_IMAGE   || 'perf-platform-jmeter';
 const API_CONTAINER   = process.env.API_CONTAINER  || 'perf-platform-api';
 const DOCKER_NETWORK  = process.env.DOCKER_NETWORK || 'perf-platform_perf-platform';
 const RESULTS_PATH    = process.env.RESULTS_PATH   || '/report';
+
+// Standalone-mode settings
+const JMETER_BIN      = process.env.JMETER_BIN     || '/opt/jmeter/bin/jmeter';
+const INFLUXDB_URL    = process.env.INFLUXDB_URL    ||
+  'http://localhost:8086/api/v2/write?org=perf-testing&bucket=jmeter&precision=ms';
+const INFLUXDB_TOKEN  = process.env.INFLUXDB_TOKEN  || 'changeme123';
 
 const GRAFANA_EXTERNAL_URL  = process.env.GRAFANA_EXTERNAL_URL || 'http://localhost:3001';
 const GRAFANA_DASHBOARD_UID  = 'jmeter-perf';
@@ -100,10 +110,8 @@ class ExecutionService {
     await TestExecution.updateGrafanaUrl(runId, grafanaUrl);
     execution.grafana_url = grafanaUrl;
 
-    logger.info(
-      `[exec:${runId}] Created for workload="${workloadName}" ` +
-      `[mode: ${LOCAL_MODE ? 'local-docker' : 'kubernetes'}]`
-    );
+    const execMode = STANDALONE_MODE ? 'standalone' : LOCAL_MODE ? 'local-docker' : 'kubernetes';
+    logger.info(`[exec:${runId}] Created for workload="${workloadName}" [mode: ${execMode}]`);
 
     this._executeAsync(execution, testPlan, mergedParams, workloadName, runId).catch((err) => {
       logger.error(`[exec:${runId}] launch error: ${err.message}`);
@@ -122,7 +130,22 @@ class ExecutionService {
       throw Object.assign(new Error(`Cannot stop execution in ${execution.status} state`), { status: 400 });
     }
 
-    if (execution.kube_namespace === 'local') {
+    if (execution.kube_namespace === 'standalone') {
+      // STANDALONE_MODE: kill the JMeter process by PID stored in controller_job_name
+      const pid = parseInt(execution.controller_job_name, 10);
+      if (pid && !isNaN(pid)) {
+        try {
+          process.kill(pid, 'SIGTERM');
+          logger.info(`[exec:${executionId}] Sent SIGTERM to standalone JMeter PID ${pid}`);
+          // Give it 5s to exit gracefully before forcing
+          setTimeout(() => {
+            try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ }
+          }, 5000);
+        } catch (err) {
+          logger.warn(`[exec:${executionId}] Could not signal PID ${pid}: ${err.message}`);
+        }
+      }
+    } else if (execution.kube_namespace === 'local') {
       if (execution.controller_job_name) {
         try {
           const Docker = require('dockerode');
@@ -151,7 +174,10 @@ class ExecutionService {
 
     const result  = { ...execution };
     const running = [TestExecution.STATUS.PROVISIONING, TestExecution.STATUS.RUNNING];
-    if (running.includes(execution.status) && execution.kube_namespace && execution.kube_namespace !== 'local') {
+    const isK8s   = execution.kube_namespace &&
+                    execution.kube_namespace !== 'local' &&
+                    execution.kube_namespace !== 'standalone';
+    if (running.includes(execution.status) && isK8s) {
       try {
         result.pods = await KubernetesService.getPodsByLabel(execution.kube_namespace, `execution-id=${executionId}`);
       } catch {
@@ -166,8 +192,190 @@ class ExecutionService {
   // ─────────────────────────────────────────────────────────────────────────
 
   static async _executeAsync(execution, testPlan, params, workloadName, runId) {
-    if (LOCAL_MODE) return this._executeLocal(execution, testPlan, params, workloadName, runId);
+    if (STANDALONE_MODE) return this._executeStandalone(execution, testPlan, params, workloadName, runId);
+    if (LOCAL_MODE)      return this._executeLocal(execution, testPlan, params, workloadName, runId);
     return this._executeKubernetes(execution, testPlan, params, workloadName, runId);
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Standalone execution (bare-metal / non-Docker)
+  //
+  // Runs the JMeter binary installed at JMETER_BIN directly on the host via
+  // child_process.spawn.  The JMX is written to RESULTS_PATH so it persists
+  // alongside the JTL output.
+  //
+  // Key env vars (set in .env or systemd unit):
+  //   STANDALONE_MODE=true
+  //   JMETER_BIN=/opt/jmeter/bin/jmeter
+  //   INFLUXDB_URL=http://localhost:8086/api/v2/write?org=perf-testing&bucket=jmeter&precision=ms
+  //   INFLUXDB_TOKEN=<your-token>
+  //   RESULTS_PATH=/opt/perf-platform/report
+  //
+  // JMeter flags injected (override JMX ${__P(...)} properties):
+  //   -JinfluxdbUrl      → points to local InfluxDB (not the Docker hostname)
+  //   -JinfluxdbToken    → InfluxDB API token
+  //   -Jworkload_name    → InfluxDB "application" tag on all data points
+  //   -Jtest_run_id      → embedded in testTitle + eventTags (annotations)
+  // ─────────────────────────────────────────────────────────────────────────
+
+  static async _executeStandalone(execution, testPlan, params, workloadName, runId) {
+    const executionId = execution.id;
+    const resultsDir  = path.join(RESULTS_PATH, String(executionId));
+    const jmxPath     = path.join(RESULTS_PATH, `jmx-${executionId}.jmx`);
+    const jtlPath     = path.join(resultsDir, 'results.jtl');
+    const logPath     = path.join(resultsDir, 'jmeter.log');
+
+    await TestExecution.updateStatus(executionId, TestExecution.STATUS.PROVISIONING);
+
+    // Write JMX to results dir
+    try {
+      fs.mkdirSync(resultsDir, { recursive: true });
+      fs.writeFileSync(jmxPath, testPlan.jmx_content || '');
+    } catch (err) {
+      logger.error(`[exec:${executionId}] Could not write JMX file: ${err.message}`);
+      await TestExecution.updateStatus(executionId, TestExecution.STATUS.FAILED, { error_message: err.message });
+      return;
+    }
+
+    // ── JMeter runtime parameters ──────────────────────────────────────────
+    const get = (keys, def) => { for (const k of keys) if (params[k] !== undefined) return params[k]; return def; };
+    const host     = get(['host', 'TARGET_HOST'],  'localhost');
+    const port     = get(['port', 'TARGET_PORT'],  3002);
+    const threads  = get(['threads', 'THREADS'],   10);
+    const rampUp   = get(['rampUp', 'RAMP_UP'],    10);
+    const duration = get(['duration', 'DURATION'], 180);
+
+    const jmeterArgs = [
+      '-n',
+      '-t',  jmxPath,
+      '-l',  jtlPath,
+      '-j',  logPath,
+      // Override InfluxDB connection (Docker hostname → localhost)
+      `-JinfluxdbUrl=${INFLUXDB_URL}`,
+      `-JinfluxdbToken=${INFLUXDB_TOKEN}`,
+      // Target host / load shape
+      `-Jhost=${host}`,
+      `-Jport=${port}`,
+      `-Jthreads=${threads}`,
+      `-JrampUp=${rampUp}`,
+      `-Jduration=${duration}`,
+      // InfluxDB tagging — used by the Grafana dashboard var-workload_name filter
+      `-Jworkload_name=${workloadName}`,
+      `-Jtest_run_id=${runId}`,
+    ];
+
+    logger.info(`[exec:${executionId}] standalone workload="${workloadName}" run_id=${runId}`);
+    logger.info(`[exec:${executionId}] ${JMETER_BIN} ${jmeterArgs.join(' ')}`);
+
+    let jmeterProc;
+    try {
+      jmeterProc = spawn(JMETER_BIN, jmeterArgs, {
+        detached: false,
+        stdio:    ['ignore', 'pipe', 'pipe'],
+      });
+    } catch (err) {
+      logger.error(`[exec:${executionId}] Failed to spawn JMeter: ${err.message}`);
+      await TestExecution.updateStatus(executionId, TestExecution.STATUS.FAILED, { error_message: err.message });
+      try { fs.unlinkSync(jmxPath); } catch {}
+      return;
+    }
+
+    // Store PID so stopTest() can signal the process
+    await TestExecution.setKubeResources(executionId, {
+      controllerJobName: String(jmeterProc.pid),
+      workerJobName:     '',
+      namespace:         'standalone',
+    });
+
+    await TestExecution.updateStatus(executionId, TestExecution.STATUS.RUNNING);
+    logger.info(`[exec:${executionId}] JMeter spawned (PID=${jmeterProc.pid})`);
+
+    // Stream stdout/stderr into API log
+    jmeterProc.stdout.on('data', (chunk) => {
+      const line = chunk.toString('utf8').trim();
+      if (line) logger.info(`[jmeter:${executionId}] ${line}`);
+    });
+    jmeterProc.stderr.on('data', (chunk) => {
+      const line = chunk.toString('utf8').trim();
+      if (line) logger.warn(`[jmeter:${executionId}] ${line}`);
+    });
+
+    // Wait for JMeter to finish
+    const exitCode = await new Promise((resolve) => {
+      jmeterProc.once('close', resolve);
+      jmeterProc.once('error', (err) => {
+        logger.error(`[exec:${executionId}] JMeter process error: ${err.message}`);
+        resolve(1);
+      });
+    });
+
+    logger.info(`[exec:${executionId}] JMeter exited (code=${exitCode})`);
+
+    // Clean up JMX file
+    try { fs.unlinkSync(jmxPath); } catch {}
+
+    // Check whether execution was stopped externally
+    const current = await TestExecution.findById(executionId);
+    if (current && current.status === TestExecution.STATUS.STOPPED) {
+      logger.info(`[exec:${executionId}] Already marked STOPPED — skipping final status update`);
+      return;
+    }
+
+    if (exitCode === 0) {
+      let parsedMetrics = null;
+      try {
+        parsedMetrics = parseJtl(jtlPath);
+        logger.info(
+          `[exec:${executionId}] JTL parsed: ` +
+          `${parsedMetrics.totalRequests} reqs, ` +
+          `p95=${parsedMetrics.p95Ms}ms, ` +
+          `err=${parsedMetrics.errorRatePct}%`
+        );
+      } catch (parseErr) {
+        logger.warn(`[exec:${executionId}] JTL parse failed (non-fatal): ${parseErr.message}`);
+      }
+
+      await TestExecution.storeResults(executionId, {
+        jtlPath,
+        reportPath: resultsDir,
+        summary: {
+          exitCode, host, threads, rampUp, duration,
+          workloadName, runId,
+          ...(parsedMetrics ? {
+            totalRequests:   parsedMetrics.totalRequests,
+            totalErrors:     parsedMetrics.totalErrors,
+            avgResponseTime: parsedMetrics.avgMs,
+            p50ResponseTime: parsedMetrics.p50Ms,
+            p95ResponseTime: parsedMetrics.p95Ms,
+            p99ResponseTime: parsedMetrics.p99Ms,
+            errorRate:       parsedMetrics.errorRatePct,
+            throughput:      parsedMetrics.avgRps,
+            peakRps:         parsedMetrics.peakRps,
+            samplers:        parsedMetrics.samplers,
+          } : {}),
+        },
+      });
+
+      if (parsedMetrics) {
+        await TestExecution.storeMetrics(executionId, {
+          p50Ms:         parsedMetrics.p50Ms,
+          p95Ms:         parsedMetrics.p95Ms,
+          p99Ms:         parsedMetrics.p99Ms,
+          errorRatePct:  parsedMetrics.errorRatePct,
+          peakRps:       parsedMetrics.peakRps,
+          avgRps:        parsedMetrics.avgRps,
+          totalRequests: parsedMetrics.totalRequests,
+          totalErrors:   parsedMetrics.totalErrors,
+        }).catch(err => logger.warn(`[exec:${executionId}] storeMetrics failed: ${err.message}`));
+      }
+
+      await TestExecution.updateStatus(executionId, TestExecution.STATUS.COMPLETED);
+      logger.info(`[exec:${executionId}] COMPLETED — grafana: ${execution.grafana_url}`);
+    } else {
+      await TestExecution.updateStatus(executionId, TestExecution.STATUS.FAILED, {
+        error_message: `JMeter exited with code ${exitCode}`,
+      });
+    }
   }
 
   // ─────────────────────────────────────────────────────────────────────────
