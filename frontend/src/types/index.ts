@@ -140,7 +140,7 @@ export interface Workload {
   name: string;
   description: string;
   type: WorkloadType;
-  business: string;        // business unit / team
+  capability: string;      // capability / team
   channel: string;         // channel (web, mobile, api, batch…)
   scriptLocation: string;  // JMX script file path/name
   jmx_file_name: string;

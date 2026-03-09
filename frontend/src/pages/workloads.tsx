@@ -42,7 +42,7 @@ function UploadModal({ open, onClose }: { open: boolean; onClose: () => void }) 
   const [name, setName]           = useState('');
   const [desc, setDesc]           = useState('');
   const [type, setType]           = useState<WorkloadType>('HTTP');
-  const [business, setBusiness]   = useState('');
+  const [capability, setCapability] = useState('');
   const [channel, setChannel]     = useState('Web');
   const [fileName, setFileName]   = useState('');
 
@@ -57,7 +57,7 @@ function UploadModal({ open, onClose }: { open: boolean; onClose: () => void }) 
       fd.append('createdBy', 'admin');
       // Field name must match backend Multer config: upload.single('jmxFile')
       if (fileRef.current?.files?.[0]) fd.append('jmxFile', fileRef.current.files[0]);
-      fd.append('config', JSON.stringify({ type, business, channel }));
+      fd.append('config', JSON.stringify({ type, capability, channel }));
       return testPlanApi.upload(fd);
     },
     onSuccess: () => {
@@ -127,8 +127,8 @@ function UploadModal({ open, onClose }: { open: boolean; onClose: () => void }) 
               </select>
             </div>
             <div className="col-span-2">
-              <label className="label">Business Unit</label>
-              <input className="input" value={business} onChange={e => setBusiness(e.target.value)} placeholder="e.g. E-Commerce" />
+              <label className="label">Capability</label>
+              <input className="input" value={capability} onChange={e => setCapability(e.target.value)} placeholder="e.g. E-Commerce" />
             </div>
             <div className="col-span-2">
               <label className="label">Description</label>
@@ -322,7 +322,7 @@ export default function WorkloadsPage() {
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
             <input
               type="search"
-              placeholder="Search by name, type, or business unit…"
+              placeholder="Search by name, type, or capability…"
               className="input pl-9"
               value={search}
               onChange={e => { setSearch(e.target.value); setPage(1); }}
@@ -361,7 +361,7 @@ export default function WorkloadsPage() {
                     <th className="table-th">ID</th>
                     <th className="table-th">Name</th>
                     <th className="table-th">Type</th>
-                    <th className="table-th">Business Unit</th>
+                    <th className="table-th">Capability</th>
                     <th className="table-th">Channel</th>
                     <th className="table-th">Script</th>
                     <th className="table-th">Created</th>
@@ -387,7 +387,7 @@ export default function WorkloadsPage() {
                         )}
                       </td>
                       <td className="table-td"><TypeBadge type={wl.type} /></td>
-                      <td className="table-td text-slate-600">{wl.business || '—'}</td>
+                      <td className="table-td text-slate-600">{wl.capability || '—'}</td>
                       <td className="table-td text-slate-600">{wl.channel || '—'}</td>
                       <td className="table-td font-mono text-xs text-slate-500 max-w-[140px] truncate">
                         {wl.jmx_file_name}

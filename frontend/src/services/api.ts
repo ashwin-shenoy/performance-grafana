@@ -76,7 +76,7 @@ function planToWorkload(plan: TestPlan): Workload {
     name:          plan.name,
     description:   plan.description,
     type:          (cfg.type as any) || 'HTTP',
-    business:      cfg.business || '—',
+    capability:    cfg.capability || '—',
     channel:       cfg.channel  || '—',
     scriptLocation:plan.jmx_file_name,
     jmx_file_name: plan.jmx_file_name,

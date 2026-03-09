@@ -170,7 +170,7 @@ export default function WorkloadDetailPage() {
           <InfoField label="Workload Name"   value={workload.name}           icon={Layers} />
           <InfoField label="ID"              value={`#${workload.id}`}       icon={FileCode} mono />
           <InfoField label="Type"            value={workload.type}           icon={Zap} />
-          <InfoField label="Business Unit"   value={workload.business}       icon={Building2} />
+          <InfoField label="Capability"       value={workload.capability}     icon={Building2} />
           <InfoField label="Channel"         value={workload.channel}        icon={Smartphone} />
           <InfoField label="Script Location" value={workload.scriptLocation} icon={FileCode} mono />
           <InfoField label="Created By"      value={workload.created_by}     icon={Users} />
