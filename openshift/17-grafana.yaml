@@ -1,7 +1,14 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # Grafana — Deployment + Service + Route
 # Runs as GID 472 → anyuid-perf SCC via perf-platform SA
-# Dashboard JSON ConfigMaps are created by deploy.sh and mounted here
+#
+# Provisioned automatically:
+#   datasource  → grafana-datasources  ConfigMap (InfluxDB-JMeter, Flux)
+#   dashboard   → grafana-dashboard-jmeter-perf ConfigMap (jmeter-perf.json)
+#   provider    → grafana-dashboards-provider ConfigMap
+#
+# GF_SERVER_ROOT_URL is set to "https://grafana.APPS_DOMAIN"; deploy scripts
+# replace APPS_DOMAIN with the real cluster wildcard via sed before applying.
 # ─────────────────────────────────────────────────────────────────────────────
 ---
 apiVersion: apps/v1
@@ -38,18 +45,12 @@ spec:
           env:
             - name: GF_PATHS_PROVISIONING
               value: /etc/grafana/provisioning
-            - name: GF_INSTALL_PLUGINS
-              value: grafana-piechart-panel
-            - name: GF_FEATURE_TOGGLES_ENABLE
-              value: "traceqlEditor traceQLStreaming metricsSummary"
-            - name: GF_UNIFIED_ALERTING_ENABLED
-              value: "true"
-            - name: GF_ALERTING_ENABLED
-              value: "false"
             - name: GF_AUTH_ANONYMOUS_ENABLED
               value: "true"
             - name: GF_AUTH_ANONYMOUS_ORG_ROLE
               value: Viewer
+            - name: GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH
+              value: /etc/grafana/provisioning/dashboards/json/jmeter-perf.json
             - name: GF_SERVER_ROOT_URL
               value: "https://grafana.APPS_DOMAIN"
           resources:
@@ -79,35 +80,9 @@ spec:
               mountPath: /etc/grafana/provisioning/datasources
             - name: dashboards-provider
               mountPath: /etc/grafana/provisioning/dashboards
-            - name: alerting
-              mountPath: /etc/grafana/provisioning/alerting
-            - name: dashboards-json-01
-              mountPath: /etc/grafana/provisioning/dashboards/json/01-active-test-monitor.json
-              subPath: 01-active-test-monitor.json
-            - name: dashboards-json-02
-              mountPath: /etc/grafana/provisioning/dashboards/json/02-run-comparison.json
-              subPath: 02-run-comparison.json
-            - name: dashboards-json-03
-              mountPath: /etc/grafana/provisioning/dashboards/json/03-slo-tracker.json
-              subPath: 03-slo-tracker.json
-            - name: dashboards-json-04
-              mountPath: /etc/grafana/provisioning/dashboards/json/04-historical-trends.json
-              subPath: 04-historical-trends.json
-            - name: dashboards-json-05
-              mountPath: /etc/grafana/provisioning/dashboards/json/05-correlation-view.json
-              subPath: 05-correlation-view.json
-            - name: dashboards-json-06
-              mountPath: /etc/grafana/provisioning/dashboards/json/06-regression-tracker.json
-              subPath: 06-regression-tracker.json
-            - name: dashboards-json-07
-              mountPath: /etc/grafana/provisioning/dashboards/json/07-executive-summary.json
-              subPath: 07-executive-summary.json
-            - name: dashboards-json-legacy
-              mountPath: /etc/grafana/provisioning/dashboards/json/jmeter-load-test.json
-              subPath: jmeter-load-test.json
-            - name: dashboards-json-obs
-              mountPath: /etc/grafana/provisioning/dashboards/json/observability.json
-              subPath: observability.json
+            - name: dashboards-json-jmeter-perf
+              mountPath: /etc/grafana/provisioning/dashboards/json/jmeter-perf.json
+              subPath: jmeter-perf.json
       volumes:
         - name: grafana-data
           persistentVolumeClaim:
@@ -118,36 +93,9 @@ spec:
         - name: dashboards-provider
           configMap:
             name: grafana-dashboards-provider
-        - name: alerting
+        - name: dashboards-json-jmeter-perf
           configMap:
-            name: grafana-alerting
-        - name: dashboards-json-01
-          configMap:
-            name: grafana-dashboard-01
-        - name: dashboards-json-02
-          configMap:
-            name: grafana-dashboard-02
-        - name: dashboards-json-03
-          configMap:
-            name: grafana-dashboard-03
-        - name: dashboards-json-04
-          configMap:
-            name: grafana-dashboard-04
-        - name: dashboards-json-05
-          configMap:
-            name: grafana-dashboard-05
-        - name: dashboards-json-06
-          configMap:
-            name: grafana-dashboard-06
-        - name: dashboards-json-07
-          configMap:
-            name: grafana-dashboard-07
-        - name: dashboards-json-legacy
-          configMap:
-            name: grafana-dashboard-legacy
-        - name: dashboards-json-obs
-          configMap:
-            name: grafana-dashboard-observability
+            name: grafana-dashboard-jmeter-perf
 
 ---
 apiVersion: v1

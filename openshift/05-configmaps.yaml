@@ -1,234 +1,10 @@
 # ─────────────────────────────────────────────────────────────────────────────
-# Monitoring Stack ConfigMaps
+# ConfigMaps — minimal stack
+#
+# Contains:
+#   grafana-datasources        → InfluxDB-JMeter only (Flux query language)
+#   grafana-dashboards-provider → loads JSON files from provisioning path
 # ─────────────────────────────────────────────────────────────────────────────
-
----
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: prometheus-config
-  namespace: perf-testing
-  labels:
-    app: prometheus
-data:
-  prometheus.yml: |
-    global:
-      scrape_interval: 15s
-      evaluation_interval: 15s
-
-    scrape_configs:
-      - job_name: 'perf-platform-api'
-        static_configs:
-          - targets: ['backend:9090']
-
-      - job_name: 'sample-app'
-        static_configs:
-          - targets: ['sample-app:3002']
-
-      - job_name: 'regression-engine'
-        metrics_path: /metrics
-        static_configs:
-          - targets: ['regression-engine:8080']
-
-      - job_name: 'kubernetes-pods'
-        kubernetes_sd_configs:
-          - role: pod
-            namespaces:
-              names: [perf-testing]
-        relabel_configs:
-          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
-            action: keep
-            regex: "true"
-          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
-            action: replace
-            target_label: __metrics_path__
-            regex: (.+)
-          - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
-            action: replace
-            regex: ([^:]+)(?::\d+)?;(\d+)
-            replacement: $1:$2
-            target_label: __address__
-          - source_labels: [__meta_kubernetes_pod_label_app]
-            target_label: app
-          - source_labels: [__meta_kubernetes_namespace]
-            target_label: namespace
-          - source_labels: [__meta_kubernetes_pod_name]
-            target_label: pod
-
----
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: loki-config
-  namespace: perf-testing
-  labels:
-    app: loki
-data:
-  loki-config.yml: |
-    auth_enabled: false
-
-    server:
-      http_listen_port: 3100
-      grpc_listen_port: 9096
-
-    common:
-      instance_addr: 127.0.0.1
-      path_prefix: /loki
-      storage:
-        filesystem:
-          chunks_directory: /loki/chunks
-          rules_directory: /loki/rules
-      replication_factor: 1
-      ring:
-        kvstore:
-          store: inmemory
-
-    query_range:
-      results_cache:
-        cache:
-          embedded_cache:
-            enabled: true
-            max_size_mb: 100
-
-    schema_config:
-      configs:
-        - from: 2024-01-01
-          store: tsdb
-          object_store: filesystem
-          schema: v13
-          index:
-            prefix: index_
-            period: 24h
-
-    limits_config:
-      allow_structured_metadata: true
-      volume_enabled: true
-      retention_period: 168h
-
-    ruler:
-      alertmanager_url: http://localhost:9093
-
----
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: tempo-config
-  namespace: perf-testing
-  labels:
-    app: tempo
-data:
-  tempo-config.yml: |
-    server:
-      http_listen_port: 3200
-
-    distributor:
-      receivers:
-        otlp:
-          protocols:
-            grpc:
-              endpoint: 0.0.0.0:4317
-            http:
-              endpoint: 0.0.0.0:4318
-
-    ingester:
-      max_block_duration: 5m
-
-    compactor:
-      compaction:
-        block_retention: 24h
-
-    storage:
-      trace:
-        backend: local
-        local:
-          path: /var/tempo/blocks
-        wal:
-          path: /var/tempo/wal
-        pool:
-          max_workers: 100
-          queue_depth: 10000
-
-    query_frontend:
-      search:
-        duration_slo: 5s
-        throughput_bytes_slo: 1.073741824e+09
-      trace_by_id:
-        duration_slo: 5s
-
-    metrics_generator:
-      registry:
-        external_labels:
-          source: tempo
-          cluster: openshift
-      storage:
-        path: /var/tempo/generator/wal
-        remote_write:
-          - url: http://prometheus:9090/api/v1/write
-            send_exemplars: true
-
-    overrides:
-      metrics_generator_processors:
-        - service-graphs
-        - span-metrics
-
----
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: promtail-config
-  namespace: perf-testing
-  labels:
-    app: promtail
-data:
-  promtail-config.yml: |
-    server:
-      http_listen_port: 9080
-      grpc_listen_port: 0
-
-    positions:
-      filename: /tmp/positions.yaml
-
-    clients:
-      - url: http://loki:3100/loki/api/v1/push
-
-    scrape_configs:
-      # OpenShift / Kubernetes CRI log format  (/var/log/pods/<ns>_<pod>_<uid>/<container>/*.log)
-      - job_name: kubernetes-pods
-        pipeline_stages:
-          - cri: {}
-          - json:
-              expressions:
-                level:   level
-                msg:     message
-                traceId: traceId
-          - labels:
-              level:
-        kubernetes_sd_configs:
-          - role: pod
-        relabel_configs:
-          - source_labels: [__meta_kubernetes_pod_node_name]
-            action: replace
-            target_label: __host__
-          - action: labelmap
-            regex: __meta_kubernetes_pod_label_(.+)
-          - source_labels: [__meta_kubernetes_namespace]
-            action: replace
-            target_label: namespace
-          - source_labels: [__meta_kubernetes_pod_name]
-            action: replace
-            target_label: pod
-          - source_labels: [__meta_kubernetes_pod_container_name]
-            action: replace
-            target_label: container
-          - source_labels: [__meta_kubernetes_namespace]
-            action: keep
-            regex: perf-testing
-          - replacement: /var/log/pods/*$1/*.log
-            separator: /
-            source_labels:
-              - __meta_kubernetes_pod_uid
-              - __meta_kubernetes_pod_container_name
-            target_label: __path__
 
 ---
 apiVersion: v1
@@ -241,88 +17,43 @@ metadata:
 data:
   datasources.yml: |
     apiVersion: 1
+
     datasources:
+      # ── JMeter metrics via InfluxDB 2.x (Flux) ─────────────────────────────
+      #
+      # JMeter BackendListener writes to bucket "jmeter" under org "perf-testing"
+      # using the built-in InfluxdbBackendListenerClient.
+      #
+      # Key tags on every data point:
+      #   application  = workload_name slug  (set by -Jworkload_name at job launch)
+      #   transaction  = sampler name | "all" (aggregate) | "internal" (VU count)
+      #   statut       = "ok" | "ko" | "all"
+      #
+      # Key fields per sampler per ~1 s interval:
+      #   avg, min, max, pct90.0, pct95.0, pct99.0   response times (ms)
+      #   throughput, hit, count, countError           rates + counts
+      #   rb, sb                                       received/sent bytes
+      #
+      # Internal (VU concurrency):
+      #   transaction=internal  →  minAT, maxAT, meanAT, startedT, endedT
+      #
+      # Events (test start/stop annotations):
+      #   measurement=events, tags: application, title, text, tags
+      # ────────────────────────────────────────────────────────────────────────
       - name: InfluxDB-JMeter
         uid: influxdb-jmeter-ds
         type: influxdb
         access: proxy
         url: http://influxdb:8086
+        isDefault: true
+        editable: true
         jsonData:
-          version: Flux
-          organization: perf-testing
+          version:       Flux
+          organization:  perf-testing
           defaultBucket: jmeter
           tlsSkipVerify: true
         secureJsonData:
           token: changeme123
-
-      - name: Loki
-        uid: loki-ds
-        type: loki
-        access: proxy
-        url: http://loki:3100
-        jsonData:
-          derivedFields:
-            - datasourceUid: tempo-ds
-              matcherRegex: '"traceId":"(\w+)"'
-              name: TraceID
-              url: '$${__value.raw}'
-
-      - name: Prometheus
-        uid: prometheus-ds
-        type: prometheus
-        access: proxy
-        url: http://prometheus:9090
-        isDefault: true
-        jsonData:
-          exemplarTraceIdDestinations:
-            - datasourceUid: tempo-ds
-              name: traceID
-
-      - name: Tempo
-        uid: tempo-ds
-        type: tempo
-        access: proxy
-        url: http://tempo:3200
-        jsonData:
-          tracesToLogsV2:
-            datasourceUid: loki-ds
-            spanStartTimeShift: '-1h'
-            spanEndTimeShift: '1h'
-            tags: [{ key: 'service.name', value: 'service' }]
-            filterByTraceID: true
-            filterBySpanID: false
-          serviceMap:
-            datasourceUid: prometheus-ds
-          search:
-            hide: false
-          nodeGraph:
-            enabled: true
-          lokiSearch:
-            datasourceUid: loki-ds
-
-      - name: Pyroscope
-        uid: pyroscope-ds
-        type: grafana-pyroscope-datasource
-        access: proxy
-        url: http://pyroscope:4040
-
-      - name: PostgreSQL-PerfPlatform
-        uid: postgres-ds
-        type: postgres
-        access: proxy
-        url: postgresql:5432
-        database: perfplatform
-        user: perfplatform
-        editable: true
-        secureJsonData:
-          password: changeme123
-        jsonData:
-          sslmode: disable
-          maxOpenConns: 10
-          maxIdleConns: 10
-          connMaxLifetime: 14400
-          postgresVersion: 1500
-          timescaledb: false
 
 ---
 apiVersion: v1

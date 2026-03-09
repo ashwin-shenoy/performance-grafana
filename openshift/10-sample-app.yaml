@@ -1,5 +1,9 @@
 # ─────────────────────────────────────────────────────────────────────────────
-# Sample App — load-test target with OTel tracing + Pyroscope profiling
+# Sample App — e-commerce load-test target
+# Pure Express.js service; no OpenTelemetry or Pyroscope dependencies.
+# Endpoints: GET /health, GET /api/products, GET /api/products/:id,
+#            GET /api/users/:id, POST /api/orders
+# Realistic latency + ~5% error injection for load testing.
 # ─────────────────────────────────────────────────────────────────────────────
 ---
 apiVersion: apps/v1
@@ -18,9 +22,6 @@ spec:
     metadata:
       labels:
         app: sample-app
-      annotations:
-        prometheus.io/scrape: "true"
-        prometheus.io/port: "3002"
     spec:
       containers:
         - name: sample-app
@@ -30,16 +31,8 @@ spec:
             - name: http
               containerPort: 3002
           env:
-            - name: OTEL_EXPORTER_OTLP_ENDPOINT
-              value: http://tempo:4318
-            - name: OTEL_SERVICE_NAME
-              value: sample-app
-            - name: OTEL_RESOURCE_ATTRIBUTES
-              value: "service.name=sample-app,service.version=1.0.0,deployment.environment=openshift"
-            - name: PYROSCOPE_SERVER_ADDRESS
-              value: http://pyroscope:4040
-            - name: PYROSCOPE_APP_NAME
-              value: sample-app
+            - name: PORT
+              value: "3002"
           resources:
             requests:
               cpu: 200m
@@ -53,6 +46,8 @@ spec:
               port: 3002
             initialDelaySeconds: 15
             periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
           livenessProbe:
             httpGet:
               path: /health

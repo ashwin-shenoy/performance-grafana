@@ -1,7 +1,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
-# PersistentVolumeClaims
+# PersistentVolumeClaims — minimal stack (4 core + 1 JMeter RWX)
 # Storage class: managed-nfs-storage (IBM Fyre default)
-# Override STORAGE_CLASS in deploy.sh if your Fyre cluster differs.
+# Override STORAGE_CLASS in deploy.sh if your cluster differs.
 # ─────────────────────────────────────────────────────────────────────────────
 
 ---
@@ -49,67 +49,7 @@ spec:
     requests:
       storage: 2Gi
 
----
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: prometheus-pvc
-  namespace: perf-testing
-  labels:
-    app: prometheus
-spec:
-  accessModes: [ReadWriteOnce]
-  storageClassName: managed-nfs-storage
-  resources:
-    requests:
-      storage: 10Gi
-
----
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: loki-pvc
-  namespace: perf-testing
-  labels:
-    app: loki
-spec:
-  accessModes: [ReadWriteOnce]
-  storageClassName: managed-nfs-storage
-  resources:
-    requests:
-      storage: 10Gi
-
----
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: tempo-pvc
-  namespace: perf-testing
-  labels:
-    app: tempo
-spec:
-  accessModes: [ReadWriteOnce]
-  storageClassName: managed-nfs-storage
-  resources:
-    requests:
-      storage: 10Gi
-
----
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: pyroscope-pvc
-  namespace: perf-testing
-  labels:
-    app: pyroscope
-spec:
-  accessModes: [ReadWriteOnce]
-  storageClassName: managed-nfs-storage
-  resources:
-    requests:
-      storage: 5Gi
-
-# Shared RWX volume for JMeter results (controller + workers both write here)
+# Shared RWX volume — JMeter controller writes results, API reads them
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim

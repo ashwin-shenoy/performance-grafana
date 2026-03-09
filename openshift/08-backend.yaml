@@ -1,6 +1,9 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # Backend API — Deployment + Service + Route
-# Image built from ./backend via OpenShift BuildConfig (see deploy.sh)
+# Image built from ./backend (see deploy.sh build_and_push step)
+#
+# GRAFANA_EXTERNAL_URL is set to "https://grafana.APPS_DOMAIN" here; the
+# deploy scripts replace APPS_DOMAIN with the real cluster apps domain via sed.
 # ─────────────────────────────────────────────────────────────────────────────
 ---
 apiVersion: apps/v1
@@ -60,6 +63,8 @@ spec:
               value: info
             - name: LOCAL_MODE
               value: "false"
+            - name: GRAFANA_EXTERNAL_URL
+              value: "https://grafana.APPS_DOMAIN"
             - name: DB_USER
               valueFrom:
                 secretKeyRef:
