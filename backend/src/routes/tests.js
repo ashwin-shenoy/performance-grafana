@@ -15,6 +15,7 @@ const multer   = require('multer');
 const TestPlan = require('../models/TestPlan');
 const validate = require('../middleware/validate');
 const logger   = require('../utils/logger');
+const { parseThreadGroups } = require('../utils/jmxParser');
 
 const router = express.Router();
 
@@ -52,11 +53,25 @@ router.post('/', upload.single('jmxFile'), async (req, res, next) => {
       try { config = JSON.parse(req.body.config); } catch (_) {}
     }
 
+    // Auto-detect thread groups from JMX unless the caller already provided them
+    const jmxContent = req.file.buffer.toString('utf-8');
+    if (!config.threadGroups) {
+      try {
+        const parsedGroups = parseThreadGroups(jmxContent);
+        if (parsedGroups.length > 0) {
+          config = { ...config, threadGroups: JSON.stringify(parsedGroups) };
+          logger.info(`Detected ${parsedGroups.length} thread group(s): ${parsedGroups.map(g => g.name).join(', ')}`);
+        }
+      } catch (parseErr) {
+        logger.warn(`JMX thread group parse failed (non-fatal): ${parseErr.message}`);
+      }
+    }
+
     const testPlan = await TestPlan.create({
       name:          req.body.name        || req.file.originalname.replace(/\.jmx$/i, ''),
       description:   req.body.description || '',
       jmxFileName:   req.file.originalname,
-      jmxContent:    req.file.buffer.toString('utf-8'),
+      jmxContent:    jmxContent,
       createdBy:     req.body.createdBy   || req.headers['x-user'] || 'anonymous',
       environmentId: req.body.environmentId || null,
       config,

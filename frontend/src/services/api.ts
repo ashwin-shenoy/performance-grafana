@@ -100,13 +100,17 @@ function parseThreadGroups(cfg: Record<string, string>) {
   try {
     if (cfg.threadGroups) return JSON.parse(cfg.threadGroups);
   } catch { /* noop */ }
-  // Default single group
+  // Fallback for legacy JMX files without explicit thread group config.
+  // The 'virtual_users' slug maps to the global -Jthreads / -JrampUp /
+  // -Jduration JMeter properties that single-group JMX files read.
   return [
     {
-      name: 'Default Users',
-      threads:  Number(cfg.threads  ?? 10),
-      rampUp:   Number(cfg.rampUp   ?? 60),
-      duration: Number(cfg.duration ?? 300),
+      name:      'Virtual Users',
+      slug:      'virtual_users',
+      threads:   Number(cfg.threads  ?? 10),
+      rampUp:    Number(cfg.rampUp   ?? 60),
+      duration:  Number(cfg.duration ?? 300),
+      thinkTime: 500,
     },
   ];
 }

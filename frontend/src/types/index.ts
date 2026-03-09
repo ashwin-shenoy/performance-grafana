@@ -119,9 +119,15 @@ export type WorkloadType =
 
 export interface ThreadGroup {
   name: string;
+  /** JMeter property prefix derived from the group name, e.g. "browse" or "checkout".
+   *  The UI uses this to build per-group run parameters:
+   *    {slug}_users, {slug}_rampup, {slug}_duration, {slug}_thinktime */
+  slug?: string;
   threads: number;
   rampUp: number;        // seconds
   duration: number;      // seconds
+  /** Think time between requests in milliseconds (configurable per group) */
+  thinkTime?: number;
   targetThroughput?: number; // requests/sec (if using Throughput Controller)
 }
 

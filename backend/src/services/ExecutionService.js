@@ -54,6 +54,47 @@ const GRAFANA_EXTERNAL_URL  = process.env.GRAFANA_EXTERNAL_URL || 'http://localh
 const GRAFANA_DASHBOARD_UID  = 'jmeter-perf';
 const GRAFANA_DASHBOARD_SLUG = 'jmeter-perf';
 
+// ── JMeter flag helpers ───────────────────────────────────────────────────────
+
+// Plan config / execution metadata keys that must NOT be forwarded to JMeter
+// as -J properties (they are UI-only or K8s-only values).
+const JMETER_PARAM_EXCLUDE = new Set([
+  'type', 'capability', 'channel', 'threadGroups',
+  'workerCpu', 'workerMemory', 'workerCpuLimit', 'workerMemoryLimit',
+]);
+
+/**
+ * Build a flat array of -J<key>=<value> strings from the merged parameters
+ * object, forwarding every key that is not in JMETER_PARAM_EXCLUDE.
+ *
+ * This covers all three categories automatically:
+ *   • Global load shape:       threads, rampUp, duration, host, port
+ *   • Per-thread-group params: {slug}_users, {slug}_rampup,
+ *                              {slug}_duration, {slug}_thinktime
+ *   • InfluxDB overrides:      influxdbUrl, influxdbToken  (standalone mode)
+ *
+ * workload_name and test_run_id are always appended last so they can
+ * never be accidentally overridden by a plan config value.
+ *
+ * @param {Record<string,any>} params
+ * @param {string} workloadName   - slugified test plan name
+ * @param {number|string} runId   - execution ID
+ * @returns {string[]}
+ */
+function buildJmeterJFlags(params, workloadName, runId) {
+  const flags = [];
+  for (const [key, val] of Object.entries(params)) {
+    if (JMETER_PARAM_EXCLUDE.has(key)) continue;
+    if (val === undefined || val === null)  continue;
+    if (typeof val === 'object')            continue; // skip nested objects
+    flags.push(`-J${key}=${val}`);
+  }
+  // Identity flags always override anything in params
+  flags.push(`-Jworkload_name=${workloadName}`);
+  flags.push(`-Jtest_run_id=${runId}`);
+  return flags;
+}
+
 // Slugify a workload name for use as an InfluxDB tag value.
 // Keeps alphanumeric + dash + underscore; replaces spaces with dashes.
 function slugify(name) {
@@ -239,29 +280,37 @@ class ExecutionService {
 
     // ── JMeter runtime parameters ──────────────────────────────────────────
     const get = (keys, def) => { for (const k of keys) if (params[k] !== undefined) return params[k]; return def; };
+    // Extract globals for execution summary storage
     const host     = get(['host', 'TARGET_HOST'],  'localhost');
     const port     = get(['port', 'TARGET_PORT'],  3002);
     const threads  = get(['threads', 'THREADS'],   10);
     const rampUp   = get(['rampUp', 'RAMP_UP'],    10);
     const duration = get(['duration', 'DURATION'], 180);
 
+    // Build the complete parameter set for flag generation:
+    //   1. Standalone defaults (host=localhost, InfluxDB on localhost)
+    //   2. Plan config + user overrides (may include per-thread-group params)
+    //   3. InfluxDB connection always overridden for standalone (last wins)
+    const standaloneParams = {
+      host:     'localhost',
+      port:     3002,
+      threads:  10,
+      rampUp:   10,
+      duration: 180,
+      ...params,
+      // Always override InfluxDB so the Docker hostname is never used
+      influxdbUrl:   INFLUXDB_URL,
+      influxdbToken: INFLUXDB_TOKEN,
+    };
+
     const jmeterArgs = [
       '-n',
-      '-t',  jmxPath,
-      '-l',  jtlPath,
-      '-j',  logPath,
-      // Override InfluxDB connection (Docker hostname → localhost)
-      `-JinfluxdbUrl=${INFLUXDB_URL}`,
-      `-JinfluxdbToken=${INFLUXDB_TOKEN}`,
-      // Target host / load shape
-      `-Jhost=${host}`,
-      `-Jport=${port}`,
-      `-Jthreads=${threads}`,
-      `-JrampUp=${rampUp}`,
-      `-Jduration=${duration}`,
-      // InfluxDB tagging — used by the Grafana dashboard var-workload_name filter
-      `-Jworkload_name=${workloadName}`,
-      `-Jtest_run_id=${runId}`,
+      '-t', jmxPath,
+      '-l', jtlPath,
+      '-j', logPath,
+      // Dynamically builds -J flags for global AND per-thread-group params,
+      // including the InfluxDB overrides merged into standaloneParams above.
+      ...buildJmeterJFlags(standaloneParams, workloadName, runId),
     ];
 
     logger.info(`[exec:${executionId}] standalone workload="${workloadName}" run_id=${runId}`);
@@ -410,26 +459,27 @@ class ExecutionService {
 
     // ── JMeter runtime parameters ──────────────────────────────────────────
     const get = (keys, def) => { for (const k of keys) if (params[k] !== undefined) return params[k]; return def; };
+    // Extract globals for execution summary storage (not used for flag building)
     const host     = get(['host', 'TARGET_HOST'],  'sample-app');
     const port     = get(['port', 'TARGET_PORT'],  3002);
     const threads  = get(['threads', 'THREADS'],   10);
     const rampUp   = get(['rampUp', 'RAMP_UP'],    10);
     const duration = get(['duration', 'DURATION'], 180);
 
+    // Merge Docker-mode defaults so they're always present as -J fallbacks.
+    // Per-thread-group params (e.g. browse_users, checkout_rampup) already live
+    // in `params` and are forwarded automatically by buildJmeterJFlags().
+    const localParams = {
+      host, port, threads, rampUp, duration, // global defaults
+      ...params,                              // plan config + user overrides
+    };
+
     const jmeterCmd = [
       '-n',
-      '-t',  `/report/jmx-${executionId}.jmx`,
-      '-l',  `/report/${executionId}/results.jtl`,
-      // Target host / load shape
-      `-Jhost=${host}`,
-      `-Jport=${port}`,
-      `-Jthreads=${threads}`,
-      `-JrampUp=${rampUp}`,
-      `-Jduration=${duration}`,
-      // InfluxDB tagging — these become InfluxDB tags on every data point
-      // and are used by the Grafana dashboard var-workload_name filter
-      `-Jworkload_name=${workloadName}`,
-      `-Jtest_run_id=${runId}`,
+      '-t', `/report/jmx-${executionId}.jmx`,
+      '-l', `/report/${executionId}/results.jtl`,
+      // Dynamically builds -J flags for global AND per-thread-group params
+      ...buildJmeterJFlags(localParams, workloadName, runId),
     ];
 
     logger.info(`[exec:${executionId}] workload="${workloadName}" run_id=${runId}`);

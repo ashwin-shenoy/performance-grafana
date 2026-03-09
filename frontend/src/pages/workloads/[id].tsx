@@ -1,18 +1,31 @@
 /**
  * Workload Details Page — Displays full workload configuration and history
  */
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/router';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   ArrowLeft, Play, CalendarClock, Clock,
   Server, Layers, FileCode, Building2, Smartphone,
-  Users, Timer, Zap, RefreshCw, XCircle,
+  Users, Timer, Zap, RefreshCw, XCircle, Settings2,
 } from 'lucide-react';
 import { format, parseISO } from 'date-fns';
 import Layout from '../../components/common/Layout';
 import { workloadApi, executionApi } from '../../services/api';
-import type { ExecutionStatus } from '../../types';
+import type { ExecutionStatus, ThreadGroup } from '../../types';
+
+/** Derive a stable slug from a ThreadGroup (handles legacy data without slug). */
+function getSlug(tg: ThreadGroup): string {
+  if (tg.slug) return tg.slug;
+  return tg.name
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, '_')
+    .replace(/[^a-z0-9_]/g, '')
+    .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 32) || 'thread_group';
+}
 
 function statusBadge(status: ExecutionStatus) {
   const map: Record<ExecutionStatus, string> = {
@@ -55,33 +68,245 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   );
 }
 
+// ── Per-thread-group state shape ──────────────────────────────────────────────
+type TgState = {
+  users:     string;  // virtual user count  → {slug}_users JMeter prop
+  rampup:    string;  // ramp-up seconds      → {slug}_rampup
+  duration:  string;  // duration seconds     → {slug}_duration
+  thinktime: string;  // think time ms        → {slug}_thinktime
+};
+
+function initTgConfig(groups: ThreadGroup[]): Record<string, TgState> {
+  const cfg: Record<string, TgState> = {};
+  for (const tg of groups) {
+    cfg[getSlug(tg)] = {
+      users:     String(tg.threads),
+      rampup:    String(tg.rampUp),
+      duration:  String(tg.duration),
+      thinktime: String(tg.thinkTime ?? 500),
+    };
+  }
+  return cfg;
+}
+
 function RunDialog({
-  workloadId, defaultWorkers, open, onClose,
+  workloadId, defaultWorkers, threadGroups, open, onClose,
 }: {
-  workloadId: number; defaultWorkers: number; open: boolean; onClose: () => void;
+  workloadId:    number;
+  defaultWorkers: number;
+  threadGroups:  ThreadGroup[];
+  open:          boolean;
+  onClose:       () => void;
 }) {
   const qc = useQueryClient();
-  const [workers, setWorkers] = useState(String(defaultWorkers));
+  const [workers,  setWorkers]  = useState(String(defaultWorkers));
+  const [tgConfig, setTgConfig] = useState<Record<string, TgState>>(() =>
+    initTgConfig(threadGroups),
+  );
+
+  // Re-initialise when the dialog opens (thread groups may have changed)
+  useEffect(() => {
+    if (open) {
+      setWorkers(String(defaultWorkers));
+      setTgConfig(initTgConfig(threadGroups));
+    }
+  }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  function setField(slug: string, field: keyof TgState, value: string) {
+    setTgConfig(prev => ({ ...prev, [slug]: { ...prev[slug], [field]: value } }));
+  }
+
+  /**
+   * Build the flat parameters object sent to the backend.
+   *
+   * For each thread group we emit:
+   *   {slug}_users, {slug}_rampup, {slug}_duration, {slug}_thinktime
+   *
+   * We also emit the global threads / rampUp / duration as backward-compat
+   * fallbacks for single-group JMX files that read ${__P(threads,…)} etc.
+   */
+  function buildParameters(): Record<string, string> {
+    const params: Record<string, string> = {};
+    const cfgEntries = Object.entries(tgConfig);
+
+    for (const [slug, state] of cfgEntries) {
+      params[`${slug}_users`]     = state.users;
+      params[`${slug}_rampup`]    = state.rampup;
+      params[`${slug}_duration`]  = state.duration;
+      params[`${slug}_thinktime`] = state.thinktime;
+    }
+
+    // Global fallback — uses first thread group values so legacy single-group
+    // JMX files (reading -Jthreads / -JrampUp / -Jduration) still work.
+    if (cfgEntries.length > 0) {
+      const [, first] = cfgEntries[0];
+      params.threads  = first.users;
+      params.rampUp   = first.rampup;
+      params.duration = first.duration;
+    }
+
+    return params;
+  }
+
   const runMut = useMutation({
-    mutationFn: () => executionApi.start({ testPlanId: workloadId, workerCount: Number(workers) }),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['executions'] }); onClose(); },
+    mutationFn: () =>
+      executionApi.start({
+        testPlanId:  workloadId,
+        workerCount: Number(workers),
+        parameters:  buildParameters(),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['executions'] });
+      onClose();
+    },
   });
+
   if (!open) return null;
+
+  const hasMultipleGroups = threadGroups.length > 1;
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
       <div className="absolute inset-0 bg-slate-900/50" onClick={onClose} />
-      <div className="relative w-full max-w-sm mx-4 bg-white rounded-2xl shadow-2xl border border-slate-200 p-6">
-        <h2 className="text-base font-bold text-slate-900 mb-4">Run Workload</h2>
-        <label className="label">Worker Pods</label>
-        <input type="number" min={1} max={20} className="input mb-4"
-          value={workers} onChange={e => setWorkers(e.target.value)} />
+
+      {/* Dialog — wider when multiple thread groups */}
+      <div className={`relative w-full mx-4 bg-white rounded-2xl shadow-2xl border border-slate-200 p-6
+        ${hasMultipleGroups ? 'max-w-3xl' : 'max-w-sm'}`}>
+
+        <div className="flex items-center gap-2 mb-5">
+          <Settings2 className="w-4 h-4 text-blue-600" />
+          <h2 className="text-base font-bold text-slate-900">Run Workload</h2>
+        </div>
+
+        {/* Worker Pods (K8s only) */}
+        <div className="mb-5">
+          <label className="label">Worker Pods</label>
+          <input
+            type="number" min={1} max={20} className="input w-28"
+            value={workers} onChange={e => setWorkers(e.target.value)}
+          />
+          <p className="text-xs text-slate-400 mt-1">Number of JMeter worker pods (Kubernetes mode)</p>
+        </div>
+
+        {/* Thread Group Configuration */}
+        <div className="mb-5">
+          <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3">
+            Thread Group Configuration
+          </p>
+
+          <div className="overflow-x-auto rounded-xl border border-slate-200">
+            <table className="w-full text-sm">
+              <thead className="bg-slate-50 border-b border-slate-200">
+                <tr>
+                  <th className="text-left text-xs font-semibold text-slate-500 uppercase tracking-wide px-4 py-2.5 min-w-[140px]">
+                    Group
+                  </th>
+                  <th className="text-right text-xs font-semibold text-slate-500 uppercase tracking-wide px-3 py-2.5 w-24">
+                    <span title="Virtual users (threads)">Users</span>
+                  </th>
+                  <th className="text-right text-xs font-semibold text-slate-500 uppercase tracking-wide px-3 py-2.5 w-24">
+                    Ramp Up (s)
+                  </th>
+                  <th className="text-right text-xs font-semibold text-slate-500 uppercase tracking-wide px-3 py-2.5 w-24">
+                    Duration (s)
+                  </th>
+                  <th className="text-right text-xs font-semibold text-slate-500 uppercase tracking-wide px-3 py-2.5 w-28">
+                    Think Time (ms)
+                  </th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {threadGroups.map((tg, i) => {
+                  const slug  = getSlug(tg);
+                  const state = tgConfig[slug] ?? {
+                    users:     String(tg.threads),
+                    rampup:    String(tg.rampUp),
+                    duration:  String(tg.duration),
+                    thinktime: String(tg.thinkTime ?? 500),
+                  };
+                  return (
+                    <tr key={slug} className={i % 2 === 0 ? 'bg-white' : 'bg-slate-50/50'}>
+                      {/* Group label */}
+                      <td className="px-4 py-2">
+                        <div className="flex items-center gap-2">
+                          <div className="w-2 h-2 rounded-full bg-blue-400 flex-shrink-0" />
+                          <span className="font-medium text-slate-800 text-xs">{tg.name}</span>
+                        </div>
+                        <span className="text-[10px] text-slate-400 font-mono ml-4">
+                          -{slug}_users
+                        </span>
+                      </td>
+
+                      {/* Users */}
+                      <td className="px-3 py-2">
+                        <input
+                          type="number" min={1} max={10000}
+                          className="input text-right w-full text-xs py-1"
+                          value={state.users}
+                          onChange={e => setField(slug, 'users', e.target.value)}
+                        />
+                      </td>
+
+                      {/* Ramp Up */}
+                      <td className="px-3 py-2">
+                        <input
+                          type="number" min={0} max={3600}
+                          className="input text-right w-full text-xs py-1"
+                          value={state.rampup}
+                          onChange={e => setField(slug, 'rampup', e.target.value)}
+                        />
+                      </td>
+
+                      {/* Duration */}
+                      <td className="px-3 py-2">
+                        <input
+                          type="number" min={1} max={86400}
+                          className="input text-right w-full text-xs py-1"
+                          value={state.duration}
+                          onChange={e => setField(slug, 'duration', e.target.value)}
+                        />
+                      </td>
+
+                      {/* Think Time */}
+                      <td className="px-3 py-2">
+                        <input
+                          type="number" min={0} max={60000} step={100}
+                          className="input text-right w-full text-xs py-1"
+                          value={state.thinktime}
+                          onChange={e => setField(slug, 'thinktime', e.target.value)}
+                        />
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          <p className="text-[10px] text-slate-400 mt-2">
+            Each value is passed to JMeter as <code className="font-mono">-J&#123;group&#125;_users=N</code>, etc.
+            Global <code className="font-mono">-Jthreads</code> / <code className="font-mono">-JrampUp</code> are also set as fallbacks.
+          </p>
+        </div>
+
+        {/* Actions */}
         <div className="flex gap-3">
           <button className="btn-secondary flex-1" onClick={onClose}>Cancel</button>
-          <button className="btn-primary flex-1" onClick={() => runMut.mutate()} disabled={runMut.isPending}>
+          <button
+            className="btn-primary flex-1"
+            onClick={() => runMut.mutate()}
+            disabled={runMut.isPending}
+          >
             <Play className="w-4 h-4" />
             {runMut.isPending ? 'Starting…' : 'Run Now'}
           </button>
         </div>
+
+        {runMut.isError && (
+          <p className="text-xs text-red-600 mt-3 text-center">
+            Failed to start: {(runMut.error as Error)?.message ?? 'Unknown error'}
+          </p>
+        )}
       </div>
     </div>
   );
@@ -137,6 +362,7 @@ export default function WorkloadDetailPage() {
       <RunDialog
         workloadId={workload.id}
         defaultWorkers={cfg.injectors}
+        threadGroups={workload.threadGroups ?? []}
         open={runOpen}
         onClose={() => setRunOpen(false)}
       />
